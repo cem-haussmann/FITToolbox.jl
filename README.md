@@ -1,5 +1,7 @@
 # FITToolbox.jl
 
+[![DOI](https://zenodo.org/badge/1355999732.svg)](https://doi.org/10.5281/zenodo.22282722)
+
 A Julia implementation of the **Finite Integration Technique** (FIT) for
 computational electromagnetics on structured, optionally non-equidistant grids.
 
