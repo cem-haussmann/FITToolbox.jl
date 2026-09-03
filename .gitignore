@@ -1,0 +1,29 @@
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/deps/deps.jl
+/deps/build.log
+/docs/build/
+/docs/site/
+LocalPreferences.toml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output from example runs
+*.png
+*.pdf
+*.svg
+!docs/src/assets/*

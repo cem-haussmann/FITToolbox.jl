@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+title: FITToolbox.jl
+message: >-
+  If you use this software in your research, please cite it
+  using the metadata from this file.
+type: software
+authors:
+  - given-names: Norman
+    family-names: Haußmann
+    email: haussmann@uni-wuppertal.de
+    affiliation: >-
+      Chair of Electromagnetic Theory, University of Wuppertal
+      orcid: 'https://orcid.org/0000-0002-1685-8760'
+  - given-names: Markus
+    family-names: Clemens
+    email: clemens@uni-wuppertal.de
+    affiliation: >-
+      Chair of Electromagnetic Theory, University of Wuppertal
+      orcid: 'https://orcid.org/0000-0002-1226-7840'
+repository-code: 'https://github.com/cem-haussmann/FITToolbox.jl.git'
+abstract: >-
+  A Julia implementation of the Finite Integration Technique (FIT)
+  for computational electromagnetics on structured, optionally
+  non-equidistant grids. Provides the discrete topological
+  operators, material matrices, boundary conditions, and field
+  reconstruction on the staggered primal-dual grid pair.
+keywords:
+  - computational electromagnetics
+  - finite integration technique
+  - FIT
+  - Maxwell equations
+  - Julia
+license: MIT
+version: 0.1.0
+date-released: '2026-09-03'
