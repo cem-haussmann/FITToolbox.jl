@@ -14,11 +14,11 @@ abstract type GridTopology end
 struct Primal <: GridTopology end
 struct Dual   <: GridTopology end
 
-abstract type Normals end
+abstract type Direction end
 
-struct X <: Normals end
-struct Y <: Normals end
-struct Z <: Normals end
+struct DirX <: Direction end
+struct DirY <: Direction end
+struct DirZ <: Direction end
 
 
 const ε₀ = 8.8541878188e-12   # F/m
@@ -73,10 +73,8 @@ export create_domain
 
 # Operators
 export get_curl
-export C,C̃
 export get_gradient
 export get_divergence
-export G,G̃,S,S̃
 
 # Create Objects
 export create_sphere!
@@ -103,7 +101,7 @@ export get_vacuum_cfl_time
 # Plotting
 export plot_nodal_values
 
-export Normals, X, Y, Z
+export Direction, DirX, DirY, DirZ
 
 ###---these are all exports from the GetIndicesofBoundaries
 # --- Boundary Types---

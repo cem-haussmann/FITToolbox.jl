@@ -9,14 +9,14 @@ using CairoMakie
 # For a cut with normal `n`, return everything that differs between the three
 # orientations: the two in-plane node vectors, the two in-plane edge-centre
 # vectors, which components of the field lie in the plane, and the axis labels.
-_slice_axes(::X, c) = (c.nodes_v, c.nodes_w, c.edges_v_center, c.edges_w_center, 2, 3, "y", "z")
-_slice_axes(::Y, c) = (c.nodes_u, c.nodes_w, c.edges_u_center, c.edges_w_center, 1, 3, "x", "z")
-_slice_axes(::Z, c) = (c.nodes_u, c.nodes_v, c.edges_u_center, c.edges_v_center, 1, 2, "x", "y")
+_slice_axes(::DirX, c) = (c.nodes_v, c.nodes_w, c.edges_v_center, c.edges_w_center, 2, 3, "y", "z")
+_slice_axes(::DirY, c) = (c.nodes_u, c.nodes_w, c.edges_u_center, c.edges_w_center, 1, 3, "x", "z")
+_slice_axes(::DirZ, c) = (c.nodes_u, c.nodes_v, c.edges_u_center, c.edges_v_center, 1, 2, "x", "y")
 
 # Rebuild a full (x, y, z) triple from the two in-plane coordinates and `pos`.
-_at(::X, pos, a, b) = (pos, a, b)
-_at(::Y, pos, a, b) = (a, pos, b)
-_at(::Z, pos, a, b) = (a, b, pos)
+_at(::DirX, pos, a, b) = (pos, a, b)
+_at(::DirY, pos, a, b) = (a, pos, b)
+_at(::DirZ, pos, a, b) = (a, b, pos)
 
 # Index of the entry of the sorted vector `v` nearest to `x`. Binary search
 # rather than argmin(abs.(v .- x)), which allocates on every streamline step.
@@ -28,7 +28,7 @@ _at(::Z, pos, a, b) = (a, b, pos)
 end
 
 
-function plot_nodal_values(config, ::Primal, data::AbstractVector, normal::Normals;
+function plot_nodal_values(config, ::Primal, data::AbstractVector, normal::Direction;
                            pos = 0, units = "m", logscale = false,
                            label = "Potential Φ [V]", clip_range = nothing,
                            plot_negative_gradient = false,
@@ -72,7 +72,7 @@ function plot_nodal_values(config, ::Primal, data::AbstractVector, normal::Norma
                   (logscale ? (; colorscale = log10) : (;))...)
 
     if plot_negative_gradient
-        field = -(G(config) * data)
+        field = -(get_gradient(config, Primal()) * data)
 
         # Field components live on primal edges, so sample at edge centres.
         vec_field = Array{Float32,3}(undef, length(ac), length(bc), 3)

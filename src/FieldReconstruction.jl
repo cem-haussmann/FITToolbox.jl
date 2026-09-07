@@ -7,10 +7,10 @@ module FieldReconstruction
 
 import ..FITDomain
 import ..convert_to_meter 
-import ..Normals
-import ..X
-import ..Y
-import ..Z
+import ..Direction
+import ..DirX
+import ..DirY
+import ..DirZ
 
 abstract type TopologicalEntity  end
 abstract type EdgeEntity   <: TopologicalEntity end

@@ -20,10 +20,10 @@ function get_gradient(config, ::Dual)
     return - S'
 end
 
-function G(config)
-    return get_gradient(config, Primal())
-end
+#function G(config)
+#    return get_gradient(config, Primal())
+#end
 
-function G̃(config)
-    return get_gradient(config, Dual())
-end
+#function G̃(config)
+#    return get_gradient(config, Dual())
+#end

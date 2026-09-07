@@ -9,7 +9,7 @@ const DualEdgeOrPrimalFacet = Union{DualEdge, PrimalFacet}
 const PrimalNodeDualVolume  = Union{PrimalNode, DualVolume}
 const DualNodePrimalVolume  = Union{DualNode, PrimalVolume}
 
-const AllNormals = Union{X,Y,Z}
+const AnyDirection = Union{DirX,DirY,DirZ}
 
 function _find_index(positions::AbstractVector, val::Real)
     idx = clamp(searchsortedlast(positions, val), 1, length(positions))
@@ -21,19 +21,19 @@ function _find_index(positions::AbstractVector, val::Real)
     return idx
 end
 
-_get_normal_offset(::X, Np) = 0
-_get_normal_offset(::Y, Np) = Np
-_get_normal_offset(::Z, Np) = 2 * Np
+_get_normal_offset(::DirX, Np) = 0
+_get_normal_offset(::DirY, Np) = Np
+_get_normal_offset(::DirZ, Np) = 2 * Np
 
 function get_index_entity(config::FITDomain, entity::PrimalNodeDualVolume, x_pos, y_pos, z_pos; units="m", atol=1e-9)
-    return get_index_entity(config, entity, X(), x_pos, y_pos, z_pos; units=units, atol=atol)
+    return get_index_entity(config, entity, DirX(), x_pos, y_pos, z_pos; units=units, atol=atol)
 end
 
 function get_index_entity(config::FITDomain, entity::DualNodePrimalVolume, x_pos, y_pos, z_pos; units="m", atol=1e-9)
-    return get_index_entity(config, entity, X(), x_pos, y_pos, z_pos; units=units, atol=atol)
+    return get_index_entity(config, entity, DirX(), x_pos, y_pos, z_pos; units=units, atol=atol)
 end
 
-function get_index_entity(config::FITDomain, entity::TopologicalEntity, normals::Normals, x_pos, y_pos, z_pos; units="m", atol=1e-9)
+function get_index_entity(config::FITDomain, entity::TopologicalEntity, normals::Direction, x_pos, y_pos, z_pos; units="m", atol=1e-9)
     unitToMeter = check_units(units)
     x = x_pos * unitToMeter
     y = y_pos * unitToMeter
@@ -63,8 +63,8 @@ function get_index_entity(config::FITDomain, entity::TopologicalEntity, normals:
 end
 
 ####PrimalEdgeOrDualFacet
-# X-Normal
-function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::X, x, y, z)
+# DirX-Normal
+function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::DirX, x, y, z)
     i = _find_index(config.edges_u_center, x)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.nodes_w, z)
@@ -74,8 +74,8 @@ function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::X, x, y, z)
     return i, j, k, config.edges_u_center[i], config.nodes_v[j], config.nodes_w[k]
 end
 
-# Y-Normal
-function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::Y, x, y, z)
+# DirY-Normal
+function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::DirY, x, y, z)
     i = _find_index(config.nodes_u, x)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.nodes_w, z)
@@ -85,8 +85,8 @@ function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::Y, x, y, z)
     return i, j, k, config.nodes_u[i], config.edges_v_center[j], config.nodes_w[k]
 end
 
-# Z-Normal
-function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::Z, x, y, z)
+# DirZ-Normal
+function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::DirZ, x, y, z)
     i = _find_index(config.nodes_u, x)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.edges_w_center, z)
@@ -98,8 +98,8 @@ end
 
 
 ####DualEdgeOrPrimalFacet
-# X-Normal
-function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::X, x, y, z)
+# DirX-Normal
+function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::DirX, x, y, z)
     i = _find_index(config.nodes_u, x)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.edges_w_center, z)
@@ -109,8 +109,8 @@ function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::X, x, y, z)
     return i, j, k, config.nodes_u[i], config.edges_v_center[j], config.edges_w_center[k]
 end
 
-# Y-Normal
-function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::Y, x, y, z)
+# DirY-Normal
+function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::DirY, x, y, z)
     i = _find_index(config.edges_u_center, x)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.edges_w_center, z)
@@ -120,8 +120,8 @@ function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::Y, x, y, z)
     return i, j, k, config.edges_u_center[i], config.nodes_v[j], config.edges_w_center[k]
 end
 
-# Z-Normal
-function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::Z, x, y, z)
+# DirZ-Normal
+function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::DirZ, x, y, z)
     i = _find_index(config.edges_u_center, x)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.nodes_w, z)
@@ -133,8 +133,8 @@ end
 
 
 ####PrimalNodeDualVolume
-# All-Normals
-function _get_ijk_and_coords(config, ::PrimalNodeDualVolume, ::AllNormals, x, y, z)
+# All-Direction
+function _get_ijk_and_coords(config, ::PrimalNodeDualVolume, ::AnyDirection, x, y, z)
     i = _find_index(config.nodes_u, x)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.nodes_w, z)
@@ -146,8 +146,8 @@ end
 
 
 ####DualNodePrimalVolume
-# All-Normals
-function _get_ijk_and_coords(config, ::DualNodePrimalVolume, ::AllNormals, x, y, z)
+# All-Direction
+function _get_ijk_and_coords(config, ::DualNodePrimalVolume, ::AnyDirection, x, y, z)
     i = _find_index(config.edges_u_center, x)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.edges_w_center, z)
@@ -158,21 +158,21 @@ function _get_ijk_and_coords(config, ::DualNodePrimalVolume, ::AllNormals, x, y,
 end
 
 # coordinate lookup, used by position_of_index
-_coords_of_ijk(c, ::PrimalEdgeOrDualFacet, ::X, i, j, k) =
+_coords_of_ijk(c, ::PrimalEdgeOrDualFacet, ::DirX, i, j, k) =
     (c.edges_u_center[i], c.nodes_v[j],        c.nodes_w[k])
-_coords_of_ijk(c, ::PrimalEdgeOrDualFacet, ::Y, i, j, k) =
+_coords_of_ijk(c, ::PrimalEdgeOrDualFacet, ::DirY, i, j, k) =
     (c.nodes_u[i],        c.edges_v_center[j], c.nodes_w[k])
-_coords_of_ijk(c, ::PrimalEdgeOrDualFacet, ::Z, i, j, k) =
+_coords_of_ijk(c, ::PrimalEdgeOrDualFacet, ::DirZ, i, j, k) =
     (c.nodes_u[i],        c.nodes_v[j],        c.edges_w_center[k])
 
-_coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::X, i, j, k) =
+_coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::DirX, i, j, k) =
     (c.nodes_u[i],        c.edges_v_center[j], c.edges_w_center[k])
-_coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::Y, i, j, k) =
+_coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::DirY, i, j, k) =
     (c.edges_u_center[i], c.nodes_v[j],        c.edges_w_center[k])
-_coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::Z, i, j, k) =
+_coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::DirZ, i, j, k) =
     (c.edges_u_center[i], c.edges_v_center[j], c.nodes_w[k])
 
-_coords_of_ijk(c, ::PrimalNodeDualVolume, ::AllNormals, i, j, k) =
+_coords_of_ijk(c, ::PrimalNodeDualVolume, ::AnyDirection, i, j, k) =
     (c.nodes_u[i],        c.nodes_v[j],        c.nodes_w[k])
-_coords_of_ijk(c, ::DualNodePrimalVolume, ::AllNormals, i, j, k) =
+_coords_of_ijk(c, ::DualNodePrimalVolume, ::AnyDirection, i, j, k) =
     (c.edges_u_center[i], c.edges_v_center[j], c.edges_w_center[k])

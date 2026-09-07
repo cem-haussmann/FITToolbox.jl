@@ -4,20 +4,20 @@
 # Date: long time ago
 
 function create_circular_loop_source(config, radius, center_u, center_v, center_w,
-                                     normal::Normals; units="m")
+                                     normal::Direction; units="m")
     _create_circular_loop_source(config,radius,center_u,center_v,center_w, normal;units)
 end
 
-function _create_circular_loop_source(config,radius,center_u,center_v,center_w, ::Y;units="m")
-    throw(ArgumentError("only X() normals are implemented; got Y()"))
+function _create_circular_loop_source(config,radius,center_u,center_v,center_w, ::DirY;units="m")
+    throw(ArgumentError("only DirX() normals are implemented; got DirY()"))
 end
 
-function _create_circular_loop_source(config,radius,center_u,center_v,center_w, ::Z;units="m")
-    throw(ArgumentError("only X() normals are implemented; got Z()"))
+function _create_circular_loop_source(config,radius,center_u,center_v,center_w, ::DirZ;units="m")
+    throw(ArgumentError("only DirX() normals are implemented; got DirZ()"))
 end
 
 
-function _create_circular_loop_source(config, radius, center_u, center_v, center_w, ::X;
+function _create_circular_loop_source(config, radius, center_u, center_v, center_w, ::DirX;
                                       units="m")
     Nodes_V, Nodes_W = config.nodes_v, config.nodes_w
     Ev_c, Ew_c = config.edges_v_center, config.edges_w_center

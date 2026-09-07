@@ -4,7 +4,7 @@
 #These functions were generated with Opus 5.0 as an inverse of get_index_entity
 
 function get_position_of_index(config::FITDomain, entity::TopologicalEntity,
-                               normal::Normals, i::Integer, j::Integer, k::Integer;
+                               normal::Direction, i::Integer, j::Integer, k::Integer;
                                units="m")
     (1 <= i <= config.Nu && 1 <= j <= config.Nv && 1 <= k <= config.Nw) ||
         throw(BoundsError("($i, $j, $k) outside 1:$(config.Nu) × 1:$(config.Nv) × 1:$(config.Nw)"))
@@ -20,7 +20,7 @@ function get_position_of_index(config::FITDomain, entity::TopologicalEntity, p::
     n = _n_components(entity)
     1 <= p <= n*Np || throw(BoundsError("index $p outside 1:$(n*Np) for $entity"))
 
-    normal = (X(), Y(), Z())[(p - 1) ÷ Np + 1]
+    normal = (DirX(), DirY(), DirZ())[(p - 1) ÷ Np + 1]
     q = mod1(p, Np)
     i = mod1(q, Nu)
     j = mod1((q - 1) ÷ Nu + 1, Nv)

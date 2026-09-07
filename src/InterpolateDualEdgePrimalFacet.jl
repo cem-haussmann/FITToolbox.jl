@@ -11,9 +11,9 @@ function interpolate(domain::FITDomain, ::DualEdge, datavectorFIT::AbstractVecto
 
         i_dual,j_dual,k_dual = result
 
-        Ex = _GetFieldValue(domain,X(), datavectorFIT,domain.nodes_u ,domain.edges_v_center,domain.edges_w_center,x, y, z, i, j_dual, k_dual, (i, j, k) -> domain.dual_edges_u[i])
-        Ey = _GetFieldValue(domain,Y(), datavectorFIT,domain.edges_u_center ,domain.nodes_v,domain.edges_w_center,x, y, z, i_dual, j, k_dual, (i, j, k) -> domain.dual_edges_v[j])
-        Ez = _GetFieldValue(domain,Z(), datavectorFIT,domain.edges_u_center ,domain.edges_v_center,domain.nodes_w,x, y, z, i_dual, j_dual, k, (i, j, k) -> domain.dual_edges_w[k])
+        Ex = _GetFieldValue(domain,DirX(), datavectorFIT,domain.nodes_u ,domain.edges_v_center,domain.edges_w_center,x, y, z, i, j_dual, k_dual, (i, j, k) -> domain.dual_edges_u[i])
+        Ey = _GetFieldValue(domain,DirY(), datavectorFIT,domain.edges_u_center ,domain.nodes_v,domain.edges_w_center,x, y, z, i_dual, j, k_dual, (i, j, k) -> domain.dual_edges_v[j])
+        Ez = _GetFieldValue(domain,DirZ(), datavectorFIT,domain.edges_u_center ,domain.edges_v_center,domain.nodes_w,x, y, z, i_dual, j_dual, k, (i, j, k) -> domain.dual_edges_w[k])
         return Ex, Ey, Ez
 end
 
@@ -29,9 +29,9 @@ function interpolate(domain::FITDomain, ::PrimalFacet, datavectorFIT::AbstractVe
 
         i_dual,j_dual,k_dual = result
 
-        Ax = _GetFieldValue(domain,X(), datavectorFIT,domain.nodes_u ,domain.edges_v_center,domain.edges_w_center,x, y, z, i, j_dual, k_dual, (i, j, k) -> domain.primal_facets_u[j, k])
-        Ay = _GetFieldValue(domain,Y(), datavectorFIT,domain.edges_u_center ,domain.nodes_v,domain.edges_w_center,x, y, z, i_dual, j, k_dual, (i, j, k) -> domain.primal_facets_v[i, k])
-        Az = _GetFieldValue(domain,Z(), datavectorFIT,domain.edges_u_center ,domain.edges_v_center,domain.nodes_w,x, y, z, i_dual, j_dual, k, (i, j, k) -> domain.primal_facets_w[i, j])
+        Ax = _GetFieldValue(domain,DirX(), datavectorFIT,domain.nodes_u ,domain.edges_v_center,domain.edges_w_center,x, y, z, i, j_dual, k_dual, (i, j, k) -> domain.primal_facets_u[j, k])
+        Ay = _GetFieldValue(domain,DirY(), datavectorFIT,domain.edges_u_center ,domain.nodes_v,domain.edges_w_center,x, y, z, i_dual, j, k_dual, (i, j, k) -> domain.primal_facets_v[i, k])
+        Az = _GetFieldValue(domain,DirZ(), datavectorFIT,domain.edges_u_center ,domain.edges_v_center,domain.nodes_w,x, y, z, i_dual, j_dual, k, (i, j, k) -> domain.primal_facets_w[i, j])
         return Ax, Ay, Az
 end
 

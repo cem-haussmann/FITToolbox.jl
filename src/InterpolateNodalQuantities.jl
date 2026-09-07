@@ -9,7 +9,7 @@ function interpolate(domain::FITDomain, ::PrimalNode, datavectorFIT::AbstractVec
 
         i,j,k = result
         #x-edge is identical because of the offset like nodal values
-        val = _GetFieldValue(domain,X(),datavectorFIT,domain.nodes_u ,domain.nodes_v,domain.nodes_w,x, y, z, i, j, k, (i,j,k)->1.0)
+        val = _GetFieldValue(domain,DirX(),datavectorFIT,domain.nodes_u ,domain.nodes_v,domain.nodes_w,x, y, z, i, j, k, (i,j,k)->1.0)
         
         return val
 end
@@ -21,7 +21,7 @@ function interpolate(domain::FITDomain, ::DualNode, datavectorFIT::AbstractVecto
 
         i_dual,j_dual,k_dual = result
         #x-edge is identical because of the offset like nodal values
-        val = _GetFieldValue(domain,X(),datavectorFIT,domain.edges_u_center ,domain.edges_v_center,domain.edges_w_center,x, y, z, i_dual, j_dual, k_dual, (i,j,k)->1.0)
+        val = _GetFieldValue(domain,DirX(),datavectorFIT,domain.edges_u_center ,domain.edges_v_center,domain.edges_w_center,x, y, z, i_dual, j_dual, k_dual, (i,j,k)->1.0)
         
         return val
 end

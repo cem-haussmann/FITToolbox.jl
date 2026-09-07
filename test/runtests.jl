@@ -41,8 +41,8 @@ end
 @testset "Dirichlet flux balance" begin
     Gh = get_ghost_matrix(D) * get_gradient(D, Primal())
     L  = Gh' * get_permittivity(D) * Gh
-    faces = [(X(),Positive()),(X(),Negative()),(Y(),Positive()),
-             (Y(),Negative()),(Z(),Positive()),(Z(),Negative())]
+    faces = [(DirX(),Positive()),(DirX(),Negative()),(DirY(),Positive()),
+             (DirY(),Negative()),(DirZ(),Positive()),(DirZ(),Negative())]
     R = get_boundary_matrix(D, faces, NodalComponent())
     Dm = Diagonal(ones(D.Np)) - R
 

@@ -76,7 +76,7 @@ L = G' * get_permittivity(domain) * G
 
 # Ground the outer boundary: R keeps the interior, D supplies the diagonal
 # entries for the rows it zeroes.
-faces = [(n, s) for n in (X(), Y(), Z()) for s in (Positive(), Negative())]
+faces = [(n, s) for n in (DirX(), DirY(), DirZ()) for s in (Positive(), Negative())]
 R = get_boundary_matrix(domain, faces, NodalComponent())
 D = Diagonal(ones(domain.Np)) - R
 

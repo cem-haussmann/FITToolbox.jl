@@ -9,7 +9,3 @@ end
 function M_ε(config)
     return get_permittivity(config)
 end
-
-function get_permittivity_pml(config,nPML::Int64; κ_max=30.0, σ_max=1.0, p=3)
-        return GetDualFacetAveragedMaterialPropertyPML(config,2,nPML; κ_max, σ_max, p)
-end

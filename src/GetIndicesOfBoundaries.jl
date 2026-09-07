@@ -15,20 +15,20 @@ struct NormalComponent     <: BoundaryComponent end
 struct TangentialComponent <: BoundaryComponent end
 struct NodalComponent <: BoundaryComponent end
 
-const DomainBoundary = Tuple{Normals, DomainFace}
+const DomainBoundary = Tuple{Direction, DomainFace}
 
 # --- Nodal Components ---
-get_component_offsets(::Normals, ::NodalComponent, Np) = (0,)
+get_component_offsets(::Direction, ::NodalComponent, Np) = (0,)
 
 # --- Normal Components ---
-get_component_offsets(::X, ::NormalComponent, Np) = (0,)
-get_component_offsets(::Y, ::NormalComponent, Np) = (Np,)
-get_component_offsets(::Z, ::NormalComponent, Np) = (2*Np,)
+get_component_offsets(::DirX, ::NormalComponent, Np) = (0,)
+get_component_offsets(::DirY, ::NormalComponent, Np) = (Np,)
+get_component_offsets(::DirZ, ::NormalComponent, Np) = (2*Np,)
 
 # --- Tangential Components ---
-get_component_offsets(::X, ::TangentialComponent, Np) = (Np, 2*Np)
-get_component_offsets(::Y, ::TangentialComponent, Np) = (0, 2*Np)
-get_component_offsets(::Z, ::TangentialComponent, Np) = (0, Np)
+get_component_offsets(::DirX, ::TangentialComponent, Np) = (Np, 2*Np)
+get_component_offsets(::DirY, ::TangentialComponent, Np) = (0, 2*Np)
+get_component_offsets(::DirZ, ::TangentialComponent, Np) = (0, Np)
 
 
 function _create_projection_matrix(indices::Vector{Int}, total_size::Int)
@@ -52,9 +52,9 @@ end
 
 function get_ghost_indices(config::FITDomain)
     #indentify dead edges/facets
-    idx_X = get_boundary_indices(config, X(), Positive(), NormalComponent())[1][1]
-    idx_Y = get_boundary_indices(config, Y(), Positive(), NormalComponent())[1][1]
-    idx_Z = get_boundary_indices(config, Z(), Positive(), NormalComponent())[1][1]
+    idx_X = get_boundary_indices(config, DirX(), Positive(), NormalComponent())[1][1]
+    idx_Y = get_boundary_indices(config, DirY(), Positive(), NormalComponent())[1][1]
+    idx_Z = get_boundary_indices(config, DirZ(), Positive(), NormalComponent())[1][1]
     
     indices = sort!(unique!(vcat(idx_X, idx_Y, idx_Z)))
         
@@ -62,14 +62,14 @@ function get_ghost_indices(config::FITDomain)
 end
 
 function get_all_tangential_boundary_indices(config::FITDomain)
-    tx_pos = get_boundary_indices(config, X(), Positive(), TangentialComponent())[1]
-    tx_neg = get_boundary_indices(config, X(), Negative(), TangentialComponent())[1]
+    tx_pos = get_boundary_indices(config, DirX(), Positive(), TangentialComponent())[1]
+    tx_neg = get_boundary_indices(config, DirX(), Negative(), TangentialComponent())[1]
     
-    ty_pos = get_boundary_indices(config, Y(), Positive(), TangentialComponent())[1]
-    ty_neg = get_boundary_indices(config, Y(), Negative(), TangentialComponent())[1]
+    ty_pos = get_boundary_indices(config, DirY(), Positive(), TangentialComponent())[1]
+    ty_neg = get_boundary_indices(config, DirY(), Negative(), TangentialComponent())[1]
     
-    tz_pos = get_boundary_indices(config, Z(), Positive(), TangentialComponent())[1]
-    tz_neg = get_boundary_indices(config, Z(), Negative(), TangentialComponent())[1]
+    tz_pos = get_boundary_indices(config, DirZ(), Positive(), TangentialComponent())[1]
+    tz_neg = get_boundary_indices(config, DirZ(), Negative(), TangentialComponent())[1]
     
     indices = vcat(
         tx_pos..., tx_neg...,
@@ -81,14 +81,14 @@ function get_all_tangential_boundary_indices(config::FITDomain)
 end
 
 function get_all_normal_boundary_indices(config::FITDomain)
-    nx_pos = get_boundary_indices(config, X(), Positive(), NormalComponent())[1]
-    nx_neg = get_boundary_indices(config, X(), Negative(), NormalComponent())[1]
+    nx_pos = get_boundary_indices(config, DirX(), Positive(), NormalComponent())[1]
+    nx_neg = get_boundary_indices(config, DirX(), Negative(), NormalComponent())[1]
     
-    ny_pos = get_boundary_indices(config, Y(), Positive(), NormalComponent())[1]
-    ny_neg = get_boundary_indices(config, Y(), Negative(), NormalComponent())[1]
+    ny_pos = get_boundary_indices(config, DirY(), Positive(), NormalComponent())[1]
+    ny_neg = get_boundary_indices(config, DirY(), Negative(), NormalComponent())[1]
     
-    nz_pos = get_boundary_indices(config, Z(), Positive(), NormalComponent())[1]
-    nz_neg = get_boundary_indices(config, Z(), Negative(), NormalComponent())[1]
+    nz_pos = get_boundary_indices(config, DirZ(), Positive(), NormalComponent())[1]
+    nz_neg = get_boundary_indices(config, DirZ(), Negative(), NormalComponent())[1]
     
     indices = vcat(
         nx_pos..., nx_neg...,
@@ -99,7 +99,7 @@ function get_all_normal_boundary_indices(config::FITDomain)
     return sort!(unique!(indices))
 end
 
-function get_boundary_indices(config::FITDomain, normals::Normals, side::DomainFace, component::BoundaryComponent)
+function get_boundary_indices(config::FITDomain, normals::Direction, side::DomainFace, component::BoundaryComponent)
     p_base, i, j, k = get_boundary_indices(config, normals, side)
     
     offsets = get_component_offsets(normals, component, config.Np)
@@ -128,8 +128,8 @@ function _generate_boundary_indices(i_range, j_range, k_range, Mu, Mv, Mw)
     return vec([1 + (i - 1)*Mu + (j - 1)*Mv + (k - 1)*Mw for i in i_range, j in j_range, k in k_range])
 end
 
-# 1. X Boundaries (+u, -u)
-function get_boundary_indices(config::FITDomain, ::X, ::Positive)
+# 1. DirX Boundaries (+u, -u)
+function get_boundary_indices(config::FITDomain, ::DirX, ::Positive)
     Mu, Mv, Mw = 1, config.Nu, config.Nu * config.Nv
     i, j, k = config.Nu:config.Nu, 1:config.Nv, 1:config.Nw
     
@@ -137,7 +137,7 @@ function get_boundary_indices(config::FITDomain, ::X, ::Positive)
     return p, config.Nu, j, k
 end
 
-function get_boundary_indices(config::FITDomain, ::X, ::Negative)
+function get_boundary_indices(config::FITDomain, ::DirX, ::Negative)
     Mu, Mv, Mw = 1, config.Nu, config.Nu * config.Nv
     i, j, k = 1:1, 1:config.Nv, 1:config.Nw
     
@@ -145,8 +145,8 @@ function get_boundary_indices(config::FITDomain, ::X, ::Negative)
     return p, 1, j, k
 end
 
-# 2. Y Boundaries (+v, -v)
-function get_boundary_indices(config::FITDomain, ::Y, ::Positive)
+# 2. DirY Boundaries (+v, -v)
+function get_boundary_indices(config::FITDomain, ::DirY, ::Positive)
     Mu, Mv, Mw = 1, config.Nu, config.Nu * config.Nv
     i, j, k = 1:config.Nu, config.Nv:config.Nv, 1:config.Nw
     
@@ -154,7 +154,7 @@ function get_boundary_indices(config::FITDomain, ::Y, ::Positive)
     return p, i, config.Nv, k
 end
 
-function get_boundary_indices(config::FITDomain, ::Y, ::Negative)
+function get_boundary_indices(config::FITDomain, ::DirY, ::Negative)
     Mu, Mv, Mw = 1, config.Nu, config.Nu * config.Nv
     i, j, k = 1:config.Nu, 1:1, 1:config.Nw
     
@@ -162,8 +162,8 @@ function get_boundary_indices(config::FITDomain, ::Y, ::Negative)
     return p, i, 1, k
 end
 
-# 3. Z Boundaries (+w, -w)
-function get_boundary_indices(config::FITDomain, ::Z, ::Positive)
+# 3. DirZ Boundaries (+w, -w)
+function get_boundary_indices(config::FITDomain, ::DirZ, ::Positive)
     Mu, Mv, Mw = 1, config.Nu, config.Nu * config.Nv
     i, j, k = 1:config.Nu, 1:config.Nv, config.Nw:config.Nw
     
@@ -171,7 +171,7 @@ function get_boundary_indices(config::FITDomain, ::Z, ::Positive)
     return p, i, j, config.Nw
 end
 
-function get_boundary_indices(config::FITDomain, ::Z, ::Negative)
+function get_boundary_indices(config::FITDomain, ::DirZ, ::Negative)
     Mu, Mv, Mw = 1, config.Nu, config.Nu * config.Nv
     i, j, k = 1:config.Nu, 1:config.Nv, 1:1
     

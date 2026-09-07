@@ -50,11 +50,11 @@ function _findPositionDual(domain::FITDomain, x, y, z)
     return i_dual, j_dual, k_dual
 end
 
-function _GetFieldValue(domain::FITDomain,normals::Normals,edgeQuantities::AbstractVector,x_pos_array,y_pos_array,z_pos_array,x,y,z,i,j,k,normalization_)
+function _GetFieldValue(domain::FITDomain,normals::Direction,edgeQuantities::AbstractVector,x_pos_array,y_pos_array,z_pos_array,x,y,z,i,j,k,normalization_)
     offset = 0
-    if normals isa Y
+    if normals isa DirY
         offset+=domain.Np
-    elseif normals isa Z
+    elseif normals isa DirZ
         offset+=2*domain.Np
     end
 
