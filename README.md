@@ -1,6 +1,8 @@
 # FITToolbox.jl
 
-[![DOI](https://zenodo.org/badge/1355999732.svg)](https://doi.org/10.5281/zenodo.22282722)
+[![CI](https://github.com/cem-haussmann/FITToolbox.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/cem-haussmann/FITToolbox.jl/actions/workflows/CI.yml)
+[![codecov](https://codecov.io/gh/cem-haussmann/FITToolbox.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/cem-haussmann/FITToolbox.jl)
+[![DOI](https://zenodo.org/badge/1355999732.svg)](https://doi.org/10.5281/zenodo.22282722))
 
 A Julia implementation of the **Finite Integration Technique** (FIT) for
 computational electromagnetics on structured, optionally non-equidistant grids.
