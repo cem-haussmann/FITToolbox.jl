@@ -60,8 +60,16 @@ include("GetVacuumCFLTime.jl")
 # --- Wire ---
 include("CreateWire.jl")
 
-# --- Plotting ---
-include("Plotting.jl")
+# --- Plotting (implemented in ext/FITToolboxMakieExt.jl) ---
+"""
+    plot_nodal_values(config, ::Primal, data, normal::Direction; kwargs...)
+
+Plot nodal values on a cut plane through `config` with the given `normal`.
+
+Requires a Makie backend. Run `using CairoMakie` (or GLMakie / WGLMakie)
+before calling; the implementation lives in a package extension.
+"""
+function plot_nodal_values end
 
 # -------------------------------------------------------
 # Exports

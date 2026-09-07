@@ -1,10 +1,16 @@
-# Plotting.jl
+# FITToolboxMakieExt.jl
 # Norman Haussmann (haussmann@uni-wuppertal.de)
 # Chair of Electromagnetic Theory, University of Wuppertal
 # Date: 06/08/2026
 # Collapsed from three near-identical methods into one, 11/08/2026
+# Moved from src/Plotting.jl into a package extension, 07/09/2026
 
-using CairoMakie
+module FITToolboxMakieExt
+
+using FITToolbox
+using FITToolbox: DirX, DirY, DirZ, Direction, Primal, PrimalNode, PrimalEdge,
+                  check_units, get_gradient, interpolate
+using Makie
 
 # For a cut with normal `n`, return everything that differs between the three
 # orientations: the two in-plane node vectors, the two in-plane edge-centre
@@ -28,7 +34,7 @@ _at(::DirZ, pos, a, b) = (a, b, pos)
 end
 
 
-function plot_nodal_values(config, ::Primal, data::AbstractVector, normal::Direction;
+function FITToolbox.plot_nodal_values(config, ::Primal, data::AbstractVector, normal::Direction;
                            pos = 0, units = "m", logscale = false,
                            label = "Potential Φ [V]", clip_range = nothing,
                            plot_negative_gradient = false,
@@ -99,3 +105,5 @@ function plot_nodal_values(config, ::Primal, data::AbstractVector, normal::Direc
     Colorbar(fig[1, 2], hm; label = label)
     return fig
 end
+
+end # module FITToolboxMakieExt
