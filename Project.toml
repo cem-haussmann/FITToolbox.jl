@@ -1,6 +1,6 @@
 name = "FITToolbox"
 uuid = "40b204b9-eff4-47bc-90eb-068aed8ffa5d"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Norman Haußmann <haussmann@uni-wuppertal.de>",
            "Markus Clemens <clemens@uni-wuppertal.de>"]
            
