@@ -69,9 +69,9 @@ domain = create_domain([100.0, 100.0, 100.0], [2.0, 2.0, 2.0];
 q = zeros(domain.Np)
 q[get_index_entity(domain, DualVolume(), 50.0, 50.0, 50.0)] = 1.602e-19
 
-# Discrete Poisson operator. The ghost matrix removes the "dead" edges in the
-# last plane of each direction, which have no geometric counterpart.
-G = get_ghost_matrix(domain) * get_gradient(domain, Primal())
+# Discrete Poisson operator. Without further conditions every face is homogeneous
+# Neumann, the natural boundary condition.
+G = get_gradient(domain, Primal())
 L = G' * get_permittivity(domain) * G
 
 # Ground the outer boundary: R keeps the interior, D supplies the diagonal

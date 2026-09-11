@@ -51,12 +51,17 @@ complex arrays makes the assembled system complex symmetric — not Hermitian �
 
 # Boundary cells
 
-The distributions are padded with one ghost layer carrying the vacuum value
-(0 for conductivity, ε₀ for permittivity), which removes the special cases at the
-grid faces. A boundary edge therefore receives a full dual facet rather than the
-half facet that geometrically exists there, so boundary entries are larger than
-the geometry implies. This is harmless when the boundary degrees of freedom are
-eliminated by a projection matrix, which is the usual case.
+Cells outside the domain are given zero width, so they contribute no area and
+their material value never enters a real edge. An edge lying in a boundary plane
+therefore receives the geometrically correct half (face) or quarter (domain
+edge) dual facet, consistent with `config.dual_facets_*`. The matrix is valid
+for natural and magnetic-wall boundaries, not only when boundary degrees of
+freedom are eliminated by projection.
+
+The dead edges in the last plane of each direction (see `get_ghost_indices`)
+have no dual facet and receive exactly zero. The matrix is therefore only
+positive semidefinite on the full 3Nₚ space: restrict to non-ghost indices, or
+use a diagonal pseudo-inverse (1/0 := 0), before inverting or factorising it.
 
 # Examples
 
@@ -78,45 +83,33 @@ function _get_dual_facet_averaged_material(config, materialIndex::Int64, materia
         size(m) == (Nu-1, Nv-1, Nw-1, 3) || throw(DimensionMismatch("$name must be $((Nu-1,Nv-1,Nw-1,3)), got $(size(m))"))
     end
 
-    defaultFill = materialIndex == 1 ? 0.0 :
-                  materialIndex == 2 ? ε₀  :
-                  throw(ArgumentError("material index $materialIndex is not defined"))
+    materialIndex in (1, 2) || throw(ArgumentError("material index $materialIndex is not defined; permeability is handled by get_reluctivity"))
+
+    S = float(promote_type(eltype(material_u), eltype(material_v), eltype(material_w)))
 
     # ghost layer so the boundary reads below stay in bounds
-    S = promote_type(eltype(material_u), eltype(material_v), eltype(material_w))
     function _extend(m)
-        e = fill(S(defaultFill), Nu+1, Nv+1, Nw+1)
-        if materialIndex == 1
-            @views e[2:end-1, 2:end-1, 2:end-1] .= m[:, :, :, materialIndex]
-        else
-            @views e[2:end-1, 2:end-1, 2:end-1] .*= m[:, :, :, materialIndex]
-        end
+        e = zeros(S, Nu+1, Nv+1, Nw+1)
+        scale = materialIndex == 2 ? ε₀ : 1.0
+        @views e[2:end-1, 2:end-1, 2:end-1] .= scale .* m[:, :, :, materialIndex]
         return e
     end
 
-    background = materialIndex == 1 ? 0.0 : 1.0
-
-    function _check_outer_filling(m, name)
-        v = @view m[:, :, :, materialIndex]
-        touching = any(!=(background), @view(v[1,   :,   :])) || any(!=(background), @view(v[end, :,   :])) ||
-                any(!=(background), @view(v[:,   1,   :])) || any(!=(background), @view(v[:, end,   :])) ||
-                any(!=(background), @view(v[:,   :,   1])) || any(!=(background), @view(v[:,   :, end]))
-        touching && @warn "$name: outermost cells hold non-default material; \
-                        they are averaged against vacuum at the boundary" maxlog=1
-    end
-
-    _check_outer_filling(material_u, "material_u")
-    _check_outer_filling(material_v, "material_v")
-    _check_outer_filling(material_w, "material_w")
     mat_u, mat_v, mat_w = _extend(material_u), _extend(material_v), _extend(material_w)
 
+    # divisors: duplicated end widths keep dead edges at 0/Δ instead of 0/0
     Extended_Edge_U = vcat(config.edges_u[1], config.edges_u, config.edges_u[end])
     Extended_Edge_V = vcat(config.edges_v[1], config.edges_v, config.edges_v[end])
     Extended_Edge_W = vcat(config.edges_w[1], config.edges_w, config.edges_w[end])
 
-    A_u = (Extended_Edge_V .* Extended_Edge_W') .* 0.25
-    A_v = (Extended_Edge_U .* Extended_Edge_W') .* 0.25
-    A_w = (Extended_Edge_U .* Extended_Edge_V') .* 0.25
+    # areas: zero-width ghost cells contribute no facet area
+    Extended_Edge_U_0 = vcat(0.0, config.edges_u, 0.0)   
+    Extended_Edge_V_0 = vcat(0.0, config.edges_v, 0.0)   
+    Extended_Edge_W_0 = vcat(0.0, config.edges_w, 0.0)   
+
+    A_u = (Extended_Edge_V_0 .* Extended_Edge_W_0') .* 0.25
+    A_v = (Extended_Edge_U_0 .* Extended_Edge_W_0') .* 0.25
+    A_w = (Extended_Edge_U_0 .* Extended_Edge_V_0') .* 0.25
 
     newAveraged = zeros(S, 3*Np)
 

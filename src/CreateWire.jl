@@ -3,6 +3,37 @@
 # Chair of Electromagnetic Theory, University of Wuppertal
 # Date: long time ago
 
+"""
+    create_circular_loop_source(config, radius, center_u, center_v, center_w, normal; units = "m")
+        -> Vector{Float64}
+
+Discrete current vector of a closed circular wire loop carrying 1 A, for use as the
+right-hand side ĵ of the curl–curl system. The vector has length `3Np` in the edge
+layout. Scale it for other currents.
+
+The loop lies in the node plane `u = const` nearest to `center_u`, and only `DirX()`
+normals are implemented. On the grid, the circle becomes a staircase: the boundary of
+all cells in that plane whose centres lie inside the radius. Every marked v- or w-edge
+carries ±1, oriented counter-clockwise about +u, i.e. with the magnetic moment along +u.
+The loop is closed by construction, so `GᵀJ = 0` holds exactly. The enclosed area
+approaches πR² as the grid is refined.
+
+`radius` and the centre coordinates are given in `units`.
+
+# Errors and warnings
+
+Throws an `ArgumentError` for a `DirY()` or `DirZ()` normal, if `center_u` lies outside
+`nodes_u[1] … nodes_u[end-2]`, or if the circle does not fit within
+`nodes[1] … nodes[end-2]` in v or w. Warns if the radius is too small to mark any edge.
+
+# Example
+
+```julia
+wire = create_circular_loop_source(domain, 50.0, 850.0, 700.0, 700.0, DirX(); units = "mm")
+J    = 1000.0 .* wire                   # 1 kA loop
+```
+"""
+
 function create_circular_loop_source(config, radius, center_u, center_v, center_w,
                                      normal::Direction; units="m")
     _create_circular_loop_source(config,radius,center_u,center_v,center_w, normal;units)
@@ -30,11 +61,11 @@ function _create_circular_loop_source(config, radius, center_u, center_v, center
     # The loop lies in the v–w plane, so only v and w constrain the radius; u only
     # has to fall inside the domain.
     config.nodes_u[1] <= cu <= config.nodes_u[end-2] ||
-        (println("Coil plane lies outside the domain in u-direction"); return NaN)
+        throw(ArgumentError("coil plane lies outside the domain in u-direction"))
     cv - R >= Nodes_V[1] && cv + R <= Nodes_V[end-2] ||
-        (println("Coil does not fit in domain in v-direction"); return NaN)
+        throw(ArgumentError("coil does not fit in the domain in v-direction"))
     cw - R >= Nodes_W[1] && cw + R <= Nodes_W[end-2] ||
-        (println("Coil does not fit in domain in w-direction"); return NaN)
+        throw(ArgumentError("coil does not fit in the domain in w-direction"))
  
 
     i = _find_index(config.nodes_u, cu)

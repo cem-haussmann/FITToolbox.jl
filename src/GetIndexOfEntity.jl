@@ -25,6 +25,31 @@ _get_normal_offset(::DirX, Np) = 0
 _get_normal_offset(::DirY, Np) = Np
 _get_normal_offset(::DirZ, Np) = 2 * Np
 
+
+
+"""
+    get_index_entity(config, entity, x, y, z; units = "m", atol = 1e-9) -> Int
+    get_index_entity(config, entity, normal, x, y, z; units = "m", atol = 1e-9) -> Int
+
+Index of the `entity` nearest to the position `(x, y, z)`, in the FIT vector layout.
+
+For edges and facets, `normal` selects the component (`DirX()`, `DirY()` or `DirZ()`)
+and the index includes its block offset, so it lies in `1:3Np`. Nodes and volumes
+have a single component: the first form applies, any `normal` is ignored and the
+index lies in `1:Np`.
+
+Positions outside the domain are not rejected: the nearest entity on the boundary is
+returned. A warning is issued whenever the distance to the requested position exceeds
+`atol` (in metres). [`get_position_of_index`](@ref) is the inverse.
+
+# Example
+
+```julia
+p = get_index_entity(domain, PrimalEdge(), DirZ(), 0.5, 0.5, 0.25)   # z-edge at that point
+q = get_index_entity(domain, DualVolume(), 50.0, 50.0, 50.0; units = "mm")
+```
+"""
+
 function get_index_entity(config::FITDomain, entity::PrimalNodeDualVolume, x_pos, y_pos, z_pos; units="m", atol=1e-9)
     return get_index_entity(config, entity, DirX(), x_pos, y_pos, z_pos; units=units, atol=atol)
 end
@@ -43,11 +68,6 @@ function get_index_entity(config::FITDomain, entity::TopologicalEntity, normals:
 
     result = _get_ijk_and_coords(config, entity, normals, x, y, z)
     
-    # Check if position was outside the domain
-    if isnothing(result)
-        return nothing
-    end
-    
     i, j, k, gx, gy, gz = result
 
     # Compute Euclidean distance using the exact grid coordinates
@@ -58,7 +78,9 @@ function get_index_entity(config::FITDomain, entity::TopologicalEntity, normals:
     end
 
     Mu, Mv, Mw = 1, config.Nu, config.Nu * config.Nv
-    offset = _get_normal_offset(normals, Np)
+    
+    # nodal and volume quantities have a single component: the normal selects nothing
+    offset = _n_components(entity) == 1 ? 0 : _get_normal_offset(normals, Np)
     return 1 + (i-1)*Mu + (j-1)*Mv + (k-1)*Mw + offset
 end
 

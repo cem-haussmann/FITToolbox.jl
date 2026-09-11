@@ -76,23 +76,6 @@ end
     end
 end
 
-@testset "material matrices on a uniform grid" begin
-    ε₀ = 8.8541878188e-12
-    ν₀ = 1/(4π * 1e-7)
-    p  = 1 + 1 + 1*D.Nu + 1*D.Nu*D.Nv     # interior node (2,2,2)
-
-    # M_ε: dual facet area / primal edge length, times ε₀
-    Mε = get_permittivity(D)
-    @test Mε[p, p] ≈ ε₀ * 4.0 / 2.0
-
-    # M_ν: dual edge length / primal facet area, times ν₀
-    Mν = get_reluctivity(D)
-    @test Mν[p, p] ≈ ν₀ * 2.0 / 4.0
-
-    # vacuum background: conductivity is zero everywhere
-    @test iszero(get_conductivity(D))
-end
-
 @testset "ghost indices" begin
     # one dead edge per node on the far plane, in each of the three directions
     @test length(get_ghost_indices(D)) == D.Nv*D.Nw + D.Nu*D.Nw + D.Nu*D.Nv
@@ -151,12 +134,6 @@ end
     @test iszero(C * G)
     @test iszero(S * C)
 
-    # material matrix on a cell with three different edge lengths around it
-    ε₀ = 8.8541878188e-12
-    p = 1 + 1 + 1*N.Nu + 1*N.Nu*N.Nv        # node (2,2,2)
-    Mε = get_permittivity(N)
-    @test Mε[p, p] ≈ ε₀ * (N.dual_edges_v[2] * N.dual_edges_w[2]) / N.edges_u[2]
-
     # the linear-field interpolation test, now on an irregular grid
     f = zeros(N.Np)
     for k = 1:N.Nw-1, j = 1:N.Nv-1, i = 1:N.Nu-1
@@ -167,13 +144,20 @@ end
     @test interpolate(N, DualNode(), f, x, y, z) ≈ 2x + 3y - z atol=1e-12
 end
 
+# M_ε, M_σ, M_ν: values, boundary treatment, dead entries, physics checks
+include("indexing.jl")
+include("interpolation_edges_facets.jl")
+include("material_matrices.jl")
+include("sources.jl")
+
 @testset "plotting extension" begin
     # The extension loaded: without it, plot_nodal_values has zero methods.
     @test length(methods(plot_nodal_values)) == 1
 
     # A smooth analytic field, so the heatmap has a real range to scale.
+    # i runs fastest, matching the node index p = i + (j-1)Nu + (k-1)NuNv.
     f = [2*D.nodes_u[i] + 3*D.nodes_v[j] - D.nodes_w[k]
-         for k in 1:D.Nw, j in 1:D.Nv, i in 1:D.Nu] |> vec
+         for i in 1:D.Nu, j in 1:D.Nv, k in 1:D.Nw] |> vec
 
     fig = plot_nodal_values(D, Primal(), f, DirZ(); pos = 4.0)
     @test fig isa Figure
