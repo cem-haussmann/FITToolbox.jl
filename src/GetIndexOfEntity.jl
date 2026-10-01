@@ -49,7 +49,6 @@ p = get_index_entity(domain, PrimalEdge(), DirZ(), 0.5, 0.5, 0.25)   # z-edge at
 q = get_index_entity(domain, DualVolume(), 50.0, 50.0, 50.0; units = "mm")
 ```
 """
-
 function get_index_entity(config::FITDomain, entity::PrimalNodeDualVolume, x_pos, y_pos, z_pos; units="m", atol=1e-9)
     return get_index_entity(config, entity, DirX(), x_pos, y_pos, z_pos; units=units, atol=atol)
 end

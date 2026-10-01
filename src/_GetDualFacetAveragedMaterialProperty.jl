@@ -73,7 +73,6 @@ Mε = _get_dual_facet_averaged_material(domain, 2)          # isotropic
 Mε = _get_dual_facet_averaged_material(domain, 2, εr, domain.material, domain.material)
 ```
 """
-
 function _get_dual_facet_averaged_material(config, materialIndex::Int64, material_u, material_v, material_w)
     Nu, Nv, Nw = config.Nu, config.Nv, config.Nw
     Mu, Mv, Mw = 1, Nu, Nu*Nv

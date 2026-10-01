@@ -33,7 +33,6 @@ wire = create_circular_loop_source(domain, 50.0, 850.0, 700.0, 700.0, DirX(); un
 J    = 1000.0 .* wire                   # 1 kA loop
 ```
 """
-
 function create_circular_loop_source(config, radius, center_u, center_v, center_w,
                                      normal::Direction; units="m")
     _create_circular_loop_source(config,radius,center_u,center_v,center_w, normal;units)
