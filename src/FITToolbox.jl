@@ -29,7 +29,7 @@ include("CheckUnits.jl")
 
 # --- Domain ---
 include("CreateDomain.jl")
-include("CreateCube.jl")
+include("CreateBrick.jl")
 include("CreateSphere.jl")
 
 # --- Operators ---
@@ -78,6 +78,8 @@ function plot_nodal_values end
 # Domain
 export FITDomain
 export create_domain
+export list_objects
+export remove_object!, undo!, change_resolution, get_source
 
 # Operators
 export get_curl
@@ -86,7 +88,8 @@ export get_divergence
 
 # Create Objects
 export create_sphere!
-export create_cube!
+#export create_cube! # old call, deprecated, exported by Base.@deprecated
+export create_brick!
 export create_circular_loop_source
 
 # Material matrices

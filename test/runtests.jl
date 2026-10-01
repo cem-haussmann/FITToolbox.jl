@@ -82,20 +82,6 @@ end
     @test all(1 .<= get_ghost_indices(D) .<= 3*D.Np)
 end
 
-@testset "create_cube!" begin
-    d = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0])
-    create_cube!(d, 0.0, 0.0, 0.0, 4.0, 4.0, 4.0; ε_r=5.0)
-    @test all(d.material[1:2, 1:2, 1:2, 2] .== 5.0)   # cells inside the cube
-    @test d.material[3, 1, 1, 2] == 1.0               # outside keeps background
-end
-
-@testset "create_sphere!" begin
-    d = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0])
-    create_sphere!(d, 3.0, 4.0, 5.0, 2.0; ε_r=5.0, μ_r=2.0)
-    @test any(d.material[:,:,:,2] .== 5.0)     # something was filled
-    @test any(d.material[:,:,:,2] .== 1.0)     # but not everything
-end
-
 @testset "check_units" begin
     @test FITToolbox.check_units("m")  == 1.0
     @test FITToolbox.check_units("mm") == 1e-3
@@ -149,6 +135,9 @@ include("indexing.jl")
 include("interpolation_edges_facets.jl")
 include("material_matrices.jl")
 include("sources.jl")
+include("objects.jl")
+include("history.jl")
+
 
 @testset "plotting extension" begin
     # The extension loaded: without it, plot_nodal_values has zero methods.

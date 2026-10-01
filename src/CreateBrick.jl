@@ -2,38 +2,44 @@
 #Norman Haussmann (haussmann@uni-wuppertal.de), Chair of Electromagnetic Theory, University of Wuppertal
 #Date: 14/01/2026
 
-function create_cube!(domain::FITDomain, u_o, v_o, w_o, u_length, v_length, w_length; units="m", σ=0.0, ε_r=1.0, μ_r=1.0)
-    σ = Float64(σ)
-    ε_r = Float64(ε_r)
-    μ_r  = Float64(μ_r)
-    unitToMeter = check_units(units)
-    
-    start_pos_u = u_o*unitToMeter
-    start_pos_v = v_o*unitToMeter
-    start_pos_w = w_o*unitToMeter
+struct Brick <: AbstractSolid
+    origin::NTuple{3,Float64}
+    lengths::NTuple{3,Float64}
+    material::Material
+end
 
-    plate_length_u = u_length*unitToMeter
-    plate_length_v = v_length*unitToMeter
-    plate_length_w = w_length*unitToMeter
+_describe_geometry(b::Brick) = "origin=$(b.origin) lengths=$(b.lengths)"
+_describe_material(b::Brick) = _describe_material(b.material)
+
+function create_brick!(domain::FITDomain, u_o, v_o, w_o, u_length, v_length, w_length;
+                       units="m", σ=0.0, ε_r=1.0, μ_r=1.0,
+                       name::String="", color::Union{Nothing,String}=nothing)
+    unitToMeter = check_units(units)
+    brick = Brick((u_o*unitToMeter, v_o*unitToMeter, w_o*unitToMeter),
+                  (u_length*unitToMeter, v_length*unitToMeter, w_length*unitToMeter),
+                  Material(σ, ε_r, μ_r, color))
+    name = _resolve_name(domain, name)
+    _apply!(domain, brick)
+    return _record_create!(domain, brick; name)
+end
+
+
+function _apply!(domain::FITDomain, brick::Brick)
+    u_min, v_min, w_min = brick.origin
+    u_max, v_max, w_max = brick.origin .+ brick.lengths
+    σ, ε_r, μ_r = brick.material.σ, brick.material.ε_r, brick.material.μ_r
 
     Nodes_U = domain.nodes_u
     Nodes_V = domain.nodes_v
     Nodes_W = domain.nodes_w
 
-    u_min = start_pos_u 
-    u_max = start_pos_u + plate_length_u
-    v_min = start_pos_v 
-    v_max = start_pos_v + plate_length_v
-    w_min = start_pos_w 
-    w_max = start_pos_w + plate_length_w
-
     # Check the requested extent against the grid before snapping. After
     # CheckClosest the indices are clamped into range, so testing them cannot
-    # detect a cube that lies outside.
+    # detect a brick that lies outside.
     (u_min >= Nodes_U[1] && u_max <= Nodes_U[end] &&
      v_min >= Nodes_V[1] && v_max <= Nodes_V[end] &&
      w_min >= Nodes_W[1] && w_max <= Nodes_W[end]) ||
-        throw(ArgumentError("cube extends beyond the domain: requested u $(u_min)–$(u_max), \
+        throw(ArgumentError("brick extends beyond the domain: requested u $(u_min)–$(u_max), \
                              v $(v_min)–$(v_max), w $(w_min)–$(w_max) m"))
     
     function CheckClosest(index, nodes, pos)
@@ -53,18 +59,18 @@ function create_cube!(domain::FITDomain, u_o, v_o, w_o, u_length, v_length, w_le
     k_max = CheckClosest(searchsortedfirst(Nodes_W, w_max), Nodes_W, w_max)
 
     i_min < i_max ||
-        throw(ArgumentError("cube has zero extent in u after snapping to the grid — \
-                             u_length = $u_length $units is smaller than one cell"))
+        throw(ArgumentError("brick has zero extent in u after snapping to the grid — \
+                             u_length = $(brick.lengths[1]) m is smaller than one cell"))
     j_min < j_max ||
-        throw(ArgumentError("cube has zero extent in v after snapping to the grid — \
-                             v_length = $v_length $units is smaller than one cell"))
+        throw(ArgumentError("brick has zero extent in v after snapping to the grid — \
+                             v_length = $(brick.lengths[2]) m is smaller than one cell"))
     k_min < k_max ||
-        throw(ArgumentError("cube has zero extent in w after snapping to the grid — \
-                             w_length = $w_length $units is smaller than one cell"))
+        throw(ArgumentError("brick has zero extent in w after snapping to the grid — \
+                             w_length = $(brick.lengths[3]) m is smaller than one cell"))
 
     Material_distribution = domain.material
 
-    @debug "Creating cube with snapped grid coordinates:" *
+    @debug "Creating brick with snapped grid coordinates:" *
     "\n  u: $(Nodes_U[i_min]) m  to  $(Nodes_U[i_max]) m  (requested: $(u_min) m to $(u_max) m)" *
     "\n  v: $(Nodes_V[j_min]) m  to  $(Nodes_V[j_max]) m  (requested: $(v_min) m to $(v_max) m)" *
     "\n  w: $(Nodes_W[k_min]) m  to  $(Nodes_W[k_max]) m  (requested: $(w_min) m to $(w_max) m)"
