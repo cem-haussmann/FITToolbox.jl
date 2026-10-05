@@ -8,7 +8,7 @@ struct Sphere <: AbstractSolid
     material::Material
 end
 
-_describe_geometry(s::Sphere) = "center=$(s.center) radius=$(s.radius)"
+_describe_geometry(s::Sphere) = "center=$(_short(s.center)) radius=$(_short(s.radius))"
 _describe_material(s::Sphere) = _describe_material(s.material)
 
 function create_sphere!(domain::FITDomain, u_o, v_o, w_o, radius;

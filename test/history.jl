@@ -125,14 +125,16 @@ end
     @test create_brick!(e, 0, 0, 0, 2, 2, 2) == 1
 end
 
-@testset "history: create_circular_loop_source is recorded" begin
+@testset "history: create_circular_loop_source! is recorded" begin
     # same grid and loop as in sources.jl: off-centre, no warnings
     wire_domain() = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5])
     d = wire_domain()
-    J = create_circular_loop_source(d, 8000.0, 10300.0, 15200.0, 14900.0, DirX();
-                                    units="mm", name="coil")
+    id = create_circular_loop_source!(d, 8000.0, 10300.0, 15200.0, 14900.0, DirX();
+                                      units="mm", name="coil")
 
-    # still returns the source vector, not an obj_id (backward compatibility)
+    # returns the obj_id, like create_brick!; the vector comes from get_source
+    @test id == 1
+    J = get_source(d, id)
     @test J isa Vector{Float64}
     @test length(J) == 3*d.Np
 
@@ -149,22 +151,21 @@ end
 
     # current scales the vector
     d2 = wire_domain()
-    J2 = create_circular_loop_source(d2, 8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0)
+    J2 = get_source(d2, create_circular_loop_source!(d2, 8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0))
     @test J2 == 1000.0 .* J
     @test only(d2._history.steps).object.current == 1000.0
 
     # solids and sources share one id sequence
     d3 = wire_domain()
     @test create_brick!(d3, 0, 0, 0, 2, 2, 2) == 1
-    create_circular_loop_source(d3, 8.0, 10.3, 15.2, 14.9, DirX())
-    @test d3._history.steps[end].obj_id == 2
+    @test create_circular_loop_source!(d3, 8.0, 10.3, 15.2, 14.9, DirX()) == 2
     @test create_sphere!(d3, 10, 15, 15, 2) == 3
 
     # failed calls are not recorded
-    @test_throws ArgumentError create_circular_loop_source(d, 8.0, 10.3, 15.2, 14.9, DirY())
-    @test_throws ArgumentError create_circular_loop_source(d, 8.0, 10.3, 15.2, 14.9, DirZ())
-    @test_throws ArgumentError create_circular_loop_source(d, 8.0, 19.5, 15.2, 14.9, DirX())  # plane beyond nodes_u[end-2]
-    @test_throws ArgumentError create_circular_loop_source(d, 8.0, 10.3, 25.0, 14.9, DirX())  # v + R beyond the domain
+    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirY())
+    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirZ())
+    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 19.5, 15.2, 14.9, DirX())  # plane beyond nodes_u[end-2]
+    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 25.0, 14.9, DirX())  # v + R beyond the domain
     @test length(d._history.steps) == 1
 end
 
@@ -173,18 +174,18 @@ end
     a = mk()
     create_brick!(a, 0, 0, 0, 4, 4, 4; σ=5.0)
     create_sphere!(a, 3, 4, 5, 2.5; ε_r=7.0, μ_r=3.0)
-    create_circular_loop_source(a, 1.0, 3.0, 4.0, 5.0, DirX())
+    create_circular_loop_source!(a, 1.0, 3.0, 4.0, 5.0, DirX())
     create_brick!(a, 2, 2, 2, 2, 2, 6; μ_r=9.0)       # overlaps brick 1 and the sphere
 
     # replay reproduces the material exactly, including overlaps and background
     ref = copy(a.material)
     a.material .= -1.0
-    @test_logs (:warn, r"Rebuilding") _replay!(a)
+    @test_logs _replay!(a)
     @test a.material == ref
 
     # deleting the sphere gives the same result as never creating it
     _record_delete!(a, 2)
-    @test_logs (:warn, r"Rebuilding") _replay!(a)
+    @test_logs _replay!(a)
     b = mk()
     create_brick!(b, 0, 0, 0, 4, 4, 4; σ=5.0)
     create_brick!(b, 2, 2, 2, 2, 2, 6; μ_r=9.0)
@@ -199,7 +200,7 @@ end
     create_brick!(a, 2, 2, 2, 2, 2, 6; μ_r=9.0)       # overlaps brick 1 and the sphere
 
     # removing the sphere: material as if it had never been created
-    @test (@test_logs (:warn, r"Rebuilding") remove_object!(a, id_sphere)) === nothing
+    @test (@test_logs remove_object!(a, id_sphere)) === nothing
     b = mk()
     create_brick!(b, 0, 0, 0, 4, 4, 4; σ=5.0)
     create_brick!(b, 2, 2, 2, 2, 2, 6; μ_r=9.0)
@@ -215,8 +216,8 @@ end
     @test a.material == before
 
     # removing all solids restores the background
-    @test_logs (:warn, r"Rebuilding") remove_object!(a, 1)
-    @test_logs (:warn, r"Rebuilding") remove_object!(a, 3)
+    @test_logs remove_object!(a, 1)
+    @test_logs remove_object!(a, 3)
     @test all(a.material[:, :, :, 1] .== 0.1)
     @test all(a.material[:, :, :, 2] .== 2.0)
     @test all(a.material[:, :, :, 3] .== 1.0)
@@ -225,10 +226,9 @@ end
     # removing a source keeps the material unchanged
     c = mk()
     create_brick!(c, 0, 0, 0, 4, 4, 4; σ=5.0)
-    create_circular_loop_source(c, 1.0, 3.0, 4.0, 5.0, DirX())
-    id_loop = c._history.steps[end].obj_id                     # the loop returns J, not its id
+    id_loop = create_circular_loop_source!(c, 1.0, 3.0, 4.0, 5.0, DirX())
     before  = copy(c.material)
-    @test_logs (:warn, r"Rebuilding") remove_object!(c, id_loop)
+    @test_logs remove_object!(c, id_loop)
     @test c.material == before
     @test _active_ids(c._history) == [1]
 end
@@ -241,8 +241,8 @@ end
     create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7, name="plate", color="#B87333")
     create_sphere!(d, 10, 15, 15, 2; ε_r=4.0, name="shell")
     create_sphere!(d, 10, 15, 15, 1; ε_r=9.0)                          # no name
-    create_circular_loop_source(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0)
-    @test_logs (:warn, r"Rebuilding") remove_object!(d, 2)
+    create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0)
+    @test_logs remove_object!(d, 2)
 
     # data: existing objects in creation order, the removed one left out
     l = list_objects(d)
@@ -250,7 +250,7 @@ end
     @test length(l) == 3
     @test [e.obj_id for e in l]       == [1, 3, 4]
     @test [e.name for e in l]         == ["plate", "obj3", "coil"]
-    @test [typeof(e.object) for e in l] == [Brick, Sphere, CircularLoop]
+    @test [e.object isa T for (e, T) in zip(l, (Brick, Sphere, CircularLoop))] == [true, true, true]
     @test only(filter(e -> e.name == "coil", l)).obj_id == 4
     @test l[1].object.material.color == "#B87333"
 
@@ -277,6 +277,21 @@ end
     @test startswith(repr(MIME"text/plain"(), list_objects(e)), "1 object:")
 end
 
+@testset "history: list_objects rounds float noise" begin
+    # nodes from a running sum of 0.01: nodes_v[end] = 1.0000000000000007, not 1.0
+    d = create_domain([100, 100, 100], [1, 1, 1]; units="cm")
+    c = d.nodes_v[end] / 2 * 100                                     # 50.000000000000036 cm
+    create_sphere!(d, 65, c, c, 20; units="cm", σ=5.8e7, name="ball")
+    create_circular_loop_source!(d, 10, 30, c, c, DirX(); units="cm", current=1 + 1im, name="ac")
+    @test only(e for e in list_objects(d) if e.name == "ball").object.center[2] != 0.5   # stored as is
+
+    table = repr(MIME"text/plain"(), list_objects(d))
+    @test occursin("center=(0.65, 0.5, 0.5) radius=0.2", table)     # shown rounded
+    @test occursin("σ=5.8e7 ε_r=1.0 μ_r=1.0", table)
+    @test occursin("I=1.0 + 1.0im A", table)
+    @test !occursin("00000000", table)
+end
+
 @testset "history: material colors" begin
     @test Material(0, 1, 1).color === nothing
     @test Material(0, 1, 1, "Red").color == "red"                 # names stored in lowercase
@@ -291,6 +306,32 @@ end
     @test isempty(d._history.steps)                               # not recorded
 end
 
+@testset "history: rebuild warns only about values written directly" begin
+    mk() = (d = create_domain([6.0, 8.0, 10.0], [0.5, 0.5, 0.5]);
+            create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.0);
+            create_brick!(d, 2, 2, 2, 2, 2, 6; μ_r=9.0); d)
+
+    # built only with create_*: no warning
+    d = mk()
+    @test_logs remove_object!(d, 2)
+    @test_logs undo!(d)
+
+    # a value written into domain.material: warned about and discarded, every time
+    for op! in (d -> remove_object!(d, 2), undo!)
+        d = mk()
+        d.material[end, end, end, 2] = 42.0
+        @test_logs (:warn, r"Rebuilding") op!(d)
+        @test d.material[end, end, end, 2] == 1.0
+    end
+
+    # the check is silent: a clipped sphere warns once per rebuild, when the rebuild
+    # applies it, not a second time from the check before
+    d = mk()
+    @test_logs (:warn, r"clipped") create_sphere!(d, 5.5, 4, 5, 1.0)
+    @test_logs (:warn, r"clipped") remove_object!(d, 1)
+    @test_logs (:warn, r"clipped") undo!(d)
+end
+
 @testset "history: undo!" begin
     mk() = create_domain([6.0, 8.0, 10.0], [0.5, 0.5, 0.5]; σ=0.1, ε_r=2.0)
     a = mk()
@@ -302,7 +343,7 @@ end
     after_sphere = copy(a.material)
 
     # undoing a create removes the object again
-    @test (@test_logs (:warn, r"Rebuilding") undo!(a)) === nothing
+    @test (@test_logs undo!(a)) === nothing
     @test a.material == after_brick
     @test _active_ids(a._history) == [1]
     @test length(a._history.steps) == 1
@@ -312,21 +353,21 @@ end
     @test a.material == after_sphere
 
     # undoing a delete brings the object back
-    @test_logs (:warn, r"Rebuilding") remove_object!(a, 3)
+    @test_logs remove_object!(a, 3)
     @test a.material == after_brick
-    @test_logs (:warn, r"Rebuilding") undo!(a)
+    @test_logs undo!(a)
     @test a.material == after_sphere
     @test _active_ids(a._history) == [1, 3]
 
     # undoing a source leaves the material unchanged
-    create_circular_loop_source(a, 1.0, 3.0, 4.0, 5.0, DirX())
-    @test_logs (:warn, r"Rebuilding") undo!(a)
+    create_circular_loop_source!(a, 1.0, 3.0, 4.0, 5.0, DirX())
+    @test_logs undo!(a)
     @test a.material == after_sphere
     @test _active_ids(a._history) == [1, 3]
 
     # undo everything: back to the background, then nothing left to undo
     while !isempty(a._history.steps)
-        @test_logs (:warn, r"Rebuilding") undo!(a)
+        @test_logs undo!(a)
     end
     @test a.material == mk().material
     @test_throws ArgumentError undo!(a)
@@ -336,17 +377,17 @@ end
 @testset "history: change_resolution" begin
     build!(d) = (create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.0, name="plate");
                  create_sphere!(d, 3, 4, 5, 2.5; ε_r=7.0, μ_r=3.0);
-                 create_circular_loop_source(d, 1.0, 3.0, 4.0, 5.0, DirX());
+                 create_circular_loop_source!(d, 1.0, 3.0, 4.0, 5.0, DirX());
                  create_brick!(d, 2, 2, 2, 2, 2, 6; μ_r=9.0); d)
 
     coarse = build!(create_domain([6.0, 8.0, 10.0], [0.5, 0.5, 0.5]; σ=0.1, ε_r=2.0))
-    @test_logs (:warn, r"Rebuilding") remove_object!(coarse, 4)
+    @test_logs remove_object!(coarse, 4)
     hist_before, mat_before = copy(coarse._history.steps), copy(coarse.material)
 
     # uniform: same result as building the model directly at the new resolution
     fine = @test_logs change_resolution(coarse, 0.25)                # clean domain: no warning
     direct = build!(create_domain([6.0, 8.0, 10.0], [0.25, 0.25, 0.25]; σ=0.1, ε_r=2.0))
-    @test_logs (:warn, r"Rebuilding") remove_object!(direct, 4)
+    @test_logs remove_object!(direct, 4)
     @test (fine.Nu, fine.Nv, fine.Nw) == (25, 33, 41)
     @test fine.material == direct.material
     fine_material = copy(fine.material)
@@ -358,7 +399,7 @@ end
     # the original is untouched and independent
     @test coarse._history.steps == hist_before
     @test coarse.material == mat_before
-    @test_logs (:warn, r"Rebuilding") undo!(fine)
+    @test_logs undo!(fine)
     @test coarse._history.steps == hist_before
 
     # per-direction values and units
@@ -371,7 +412,7 @@ end
     ew = fill(0.5, 20)                                                # 10 m
     graded = @test_logs change_resolution(coarse, eu, ev, ew)
     direct = build!(create_domain(eu, ev, ew; σ=0.1, ε_r=2.0))
-    @test_logs (:warn, r"Rebuilding") remove_object!(direct, 4)
+    @test_logs remove_object!(direct, 4)
     @test graded.edges_u == eu
     @test graded.material == direct.material
     mmg = @test_logs change_resolution(coarse, 1000 .* eu, 1000 .* ev, 1000 .* ew; units="mm")
@@ -397,10 +438,15 @@ end
     mk() = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5])
     d = mk()
     create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7, name="plate")
-    J1 = create_circular_loop_source(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0)
-    J2 = create_circular_loop_source(d, 5.0, 6.0, 15.0, 15.0, DirX(); name="pickup", current=-200.0)
+    @test create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0) == 2
+    @test create_circular_loop_source!(d, 5.0, 6.0, 15.0, 15.0, DirX(); name="pickup", current=-200.0) == 3
 
-    # one source, by name or id: identical to what create_circular_loop_source returned
+    # reference: each loop alone in an empty domain of the same grid
+    alone(args...; kw...) = (e = mk(); get_source(e, create_circular_loop_source!(e, args...; kw...)))
+    J1 = alone(8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0)
+    J2 = alone(5.0, 6.0, 15.0, 15.0, DirX(); current=-200.0)
+
+    # one source, by name or id: the same vector as the loop alone
     @test get_source(d, "coil")   == J1
     @test get_source(d, 2)        == J1
     @test get_source(d, "pickup") == J2
@@ -416,17 +462,17 @@ end
     @test_throws ArgumentError get_source(d, 99)
 
     # removed sources are gone, undo brings them back
-    @test_logs (:warn, r"Rebuilding") remove_object!(d, "pickup")
+    @test_logs remove_object!(d, "pickup")
     @test_throws ArgumentError get_source(d, "pickup")
     @test get_source(d, "coil") == J1                                  # the other source is untouched
-    @test_logs (:warn, r"Rebuilding") undo!(d)
+    @test_logs undo!(d)
     @test get_source(d, "pickup") == J2
 
     # after change_resolution: same as creating the loop on the new grid
     fine = change_resolution(d, (0.5, 0.25, 0.25))
     direct = create_domain([20.0, 30.0, 30.0], [0.5, 0.25, 0.25])
     @test get_source(fine, "coil") ==
-          create_circular_loop_source(direct, 8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0)
+          get_source(direct, create_circular_loop_source!(direct, 8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0))
     @test length(get_source(fine, "coil")) == 3 * fine.Np
     @test get_source(d, "coil") == J1                                  # the original keeps its grid
 end
@@ -438,15 +484,19 @@ end
     # default names "obj<id>", user names kept
     @test create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7) == 1
     @test create_sphere!(d, 10, 15, 15, 2; ε_r=4.0, name="head") == 2
-    J1 = create_circular_loop_source(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0)
-    J2 = create_circular_loop_source(d, 5.0, 6.0, 15.0, 15.0, DirX())
+    @test create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0) == 3
+    @test create_circular_loop_source!(d, 5.0, 6.0, 15.0, 15.0, DirX()) == 4
+    alone(args...; kw...) = (e = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5]);
+                             get_source(e, create_circular_loop_source!(e, args...; kw...)))
+    J1 = alone(8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0)
+    J2 = alone(5.0, 6.0, 15.0, 15.0, DirX())
     @test [e.name for e in list_objects(d)] == ["obj1", "head", "coil", "obj4"]
 
     # names are unique; "obj<number>" is reserved; a rejected name changes nothing
     before = copy(d.material)
     @test_throws ArgumentError create_sphere!(d, 10, 15, 15, 3; ε_r=9.0, name="head")
     @test_throws ArgumentError create_brick!(d, 0, 0, 0, 2, 2, 2; name="obj7")
-    @test_throws ArgumentError create_circular_loop_source(d, 5.0, 6.0, 15.0, 15.0, DirX(); name="coil")
+    @test_throws ArgumentError create_circular_loop_source!(d, 5.0, 6.0, 15.0, 15.0, DirX(); name="coil")
     @test d.material == before
     @test length(d._history.steps) == 4
     @test create_brick!(d, 0, 0, 0, 2, 2, 2) == 5                 # no id used up by the failures
@@ -462,14 +512,35 @@ end
     @test_throws ArgumentError get_source(d, 99)
 
     # remove by name; the name becomes free again
-    @test_logs (:warn, r"Rebuilding") remove_object!(d, "head")
+    @test_logs remove_object!(d, "head")
     @test "head" ∉ [e.name for e in list_objects(d)]
     @test_throws ArgumentError remove_object!(d, "head")
     @test create_sphere!(d, 10, 15, 15, 1; ε_r=2.0, name="head") == 6
 
     # undo steps back through states that were valid, so names stay unique
-    @test_logs (:warn, r"Rebuilding") undo!(d)                    # undoes creating the new "head"
-    @test_logs (:warn, r"Rebuilding") undo!(d)                    # undoes the removal: old "head" back
+    @test_logs undo!(d)                    # undoes creating the new "head"
+    @test_logs undo!(d)                    # undoes the removal: old "head" back
     @test only(e for e in list_objects(d) if e.name == "head").obj_id == 2
 end
 
+@testset "history: complex current" begin
+    mk(res) = create_domain([20.0, 30.0, 30.0], res)
+    loop!(d, I, name) = create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX();
+                                                     current=I, name=name)
+    d = mk([1.0, 0.5, 0.5])
+    create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7, name="plate")
+    loop!(d, 100.0 + 50.0im, "ac")
+
+    # change_resolution: the phasor is kept, same as creating it on the new grid
+    fine   = change_resolution(d, (0.5, 0.25, 0.25))
+    direct = mk([0.5, 0.25, 0.25])
+    @test get_source(fine, "ac") == get_source(direct, loop!(direct, 100.0 + 50.0im, "ac"))
+    @test eltype(get_source(fine, "ac")) == ComplexF64
+
+    # remove and undo bring back the same complex source
+    Jc = get_source(d, "ac")
+    @test_logs remove_object!(d, "ac")
+    @test_throws ArgumentError get_source(d, "ac")
+    @test_logs undo!(d)
+    @test get_source(d, "ac") == Jc
+end

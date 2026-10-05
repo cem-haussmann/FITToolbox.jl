@@ -8,7 +8,7 @@ struct Brick <: AbstractSolid
     material::Material
 end
 
-_describe_geometry(b::Brick) = "origin=$(b.origin) lengths=$(b.lengths)"
+_describe_geometry(b::Brick) = "origin=$(_short(b.origin)) lengths=$(_short(b.lengths))"
 _describe_material(b::Brick) = _describe_material(b.material)
 
 function create_brick!(domain::FITDomain, u_o, v_o, w_o, u_length, v_length, w_length;
@@ -83,3 +83,6 @@ function _apply!(domain::FITDomain, brick::Brick)
         md[i,j,k,3] = μ_r
     end
 end
+
+@deprecate create_cube!(args...; kwargs...) create_brick!(args...; kwargs...)
+
