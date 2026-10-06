@@ -81,6 +81,12 @@ the id of the new object.
 - The coil, eddy-current and SPFD dosimetry notebooks use `create_circular_loop_source!`
   with `current` and `get_source`.
 - New notebook `examples/snippets/Domain_and_History.ipynb`.
+- New notebook `examples/static/E-Statics-Dielectric-Sphere.ipynb`: a dielectric sphere
+  in a uniform field on four grids via `change_resolution`, against the analytical
+  solution.
+- The examples find the package through a relative path in `examples/Project.toml`, so
+  they run from any clone. The first cell of each notebook sets up the environment, on
+  Julia 1.10 as well as on later versions.
 
 ## [0.2.0] - 2026-09-11
 
