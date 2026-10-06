@@ -27,3 +27,4 @@ Thumbs.db
 *.pdf
 *.svg
 !docs/src/assets/*
+MyDomain_Example.toml

@@ -354,4 +354,21 @@ end
     end
 end
 
+# ---------------------------------------------------------------------------
+# Aliases
+# ---------------------------------------------------------------------------
+
+@testset "aliases: M_σ, M_ε, M_ν equal get_conductivity, get_permittivity, get_reluctivity" begin
+    # all three properties non-uniform and different, so an alias pointing to
+    # the wrong matrix cannot pass by coincidence
+    h = create_domain(g.edges_u, g.edges_v, g.edges_w; units = "m")
+    h.material[:, :, :, 1] .= _mm_field(h, 7, 13, 29)
+    h.material[:, :, :, 2] .= _mm_field(h, 3, 5, 17)
+    h.material[:, :, :, 3] .= _mm_field(h, 11, 2, 19)
+
+    @test FITToolbox.M_σ(h) == get_conductivity(h)
+    @test FITToolbox.M_ε(h) == get_permittivity(h)
+    @test FITToolbox.M_ν(h) == get_reluctivity(h)
+end
+
 end

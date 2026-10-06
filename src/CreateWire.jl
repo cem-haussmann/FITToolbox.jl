@@ -1,63 +1,87 @@
-# FieldReconstruction.jl
+# CreateWire.jl
 # Norman Haussmann (haussmann@uni-wuppertal.de)
 # Chair of Electromagnetic Theory, University of Wuppertal
 # Date: long time ago
 
-"""
-    create_circular_loop_source(config, radius, center_u, center_v, center_w, normal; units = "m")
-        -> Vector{Float64}
+struct CircularLoop{T<:Union{Float64,ComplexF64}} <: AbstractSource
+    center::NTuple{3,Float64}
+    radius::Float64
+    normal::Direction
+    current::T               # A; complex for phasors in the frequency domain
+end
 
-Discrete current vector of a closed circular wire loop carrying 1 A, for use as the
-right-hand side ĵ of the curl–curl system. The vector has length `3Np` in the edge
-layout. Scale it for other currents.
+# Int/Float32 → Float64, any Complex → ComplexF64
+CircularLoop(center, radius, normal, current::Real)    = CircularLoop{Float64}(center, radius, normal, current)
+CircularLoop(center, radius, normal, current::Complex) = CircularLoop{ComplexF64}(center, radius, normal, current)
+
+
+_describe_geometry(c::CircularLoop) =
+    "center=$(_short(c.center)) radius=$(_short(c.radius)) normal=$(nameof(typeof(c.normal)))"
+_describe_material(c::CircularLoop) = "I=$(_short(c.current)) A"
+
+"""
+    create_circular_loop_source!(config, radius, center_u, center_v, center_w, normal;
+                                 units = "m", current = 1.0, name = "") -> obj_id
+
+Add a closed circular wire loop carrying `current` (in A) to `config` and return its
+`obj_id`. The loop is recorded in the history like `create_brick!`; its discrete
+current vector, the right-hand side ĵ of the curl–curl system, comes from
+`get_source(config, obj_id)` or `get_source(config, name)`. It has length `3Np` in the
+edge layout and is recomputed on the current grid, so it stays valid after
+`change_resolution`. `current` may be complex, e.g. for phasors in the frequency
+domain; the source vector is then `ComplexF64`.
 
 The loop lies in the node plane `u = const` nearest to `center_u`, and only `DirX()`
 normals are implemented. On the grid, the circle becomes a staircase: the boundary of
 all cells in that plane whose centres lie inside the radius. Every marked v- or w-edge
-carries ±1, oriented counter-clockwise about +u, i.e. with the magnetic moment along +u.
-The loop is closed by construction, so `GᵀJ = 0` holds exactly. The enclosed area
-approaches πR² as the grid is refined.
+carries ±`current`, oriented counter-clockwise about +u, i.e. with the magnetic moment
+along +u for a positive current. The loop is closed by construction, so `GᵀJ = 0` holds
+exactly. The enclosed area approaches πR² as the grid is refined.
 
 `radius` and the centre coordinates are given in `units`.
 
 # Errors and warnings
 
 Throws an `ArgumentError` for a `DirY()` or `DirZ()` normal, if `center_u` lies outside
-`nodes_u[1] … nodes_u[end-2]`, or if the circle does not fit within
-`nodes[1] … nodes[end-2]` in v or w. Warns if the radius is too small to mark any edge.
+`nodes_u[1] … nodes_u[end-2]`, if the circle does not fit within
+`nodes[1] … nodes[end-2]` in v or w, or if `name` is already used. Nothing is recorded
+then. Warns if the radius is too small to mark any edge.
 
 # Example
 
 ```julia
-wire = create_circular_loop_source(domain, 50.0, 850.0, 700.0, 700.0, DirX(); units = "mm")
-J    = 1000.0 .* wire                   # 1 kA loop
+create_circular_loop_source!(domain, 50.0, 850.0, 700.0, 700.0, DirX();
+                             units = "mm", current = 1000.0, name = "coil")   # 1 kA loop
+J = get_source(domain, "coil")
 ```
 """
-
-function create_circular_loop_source(config, radius, center_u, center_v, center_w,
-                                     normal::Direction; units="m")
-    _create_circular_loop_source(config,radius,center_u,center_v,center_w, normal;units)
+function create_circular_loop_source!(config::FITDomain, radius, center_u, center_v, center_w,
+                                     normal::Direction; units="m", current=1.0, name::String="")
+    unitToMeter = check_units(units)
+    name = _resolve_name(config, name)
+    loop = CircularLoop((center_u*unitToMeter, center_v*unitToMeter, center_w*unitToMeter), radius*unitToMeter, normal, current)
+    _discretize_source(config, loop)     # throws on invalid input, before anything is recorded
+    return _record_create!(config, loop; name)
 end
 
-function _create_circular_loop_source(config,radius,center_u,center_v,center_w, ::DirY;units="m")
+_discretize_source(config::FITDomain, loop::CircularLoop) =
+    loop.current .* _circular_loop_unit_source(config, loop, loop.normal)
+
+_circular_loop_unit_source(config, loop::CircularLoop, ::DirY) =
     throw(ArgumentError("only DirX() normals are implemented; got DirY()"))
-end
 
-function _create_circular_loop_source(config,radius,center_u,center_v,center_w, ::DirZ;units="m")
+_circular_loop_unit_source(config, loop::CircularLoop, ::DirZ) =
     throw(ArgumentError("only DirX() normals are implemented; got DirZ()"))
-end
 
-
-function _create_circular_loop_source(config, radius, center_u, center_v, center_w, ::DirX;
-                                      units="m")
+function _circular_loop_unit_source(config, loop::CircularLoop, ::DirX)
     Nodes_V, Nodes_W = config.nodes_v, config.nodes_w
     Ev_c, Ew_c = config.edges_v_center, config.edges_w_center
     Nu, Nv, Nw, Np = config.Nu, config.Nv, config.Nw, config.Np
- 
-    s = check_units(units)
-    cu, cv, cw = center_u*s, center_v*s, center_w*s
-    R = radius*s
- 
+
+    cu, cv, cw = loop.center
+    R = loop.radius
+    R > 0 || throw(ArgumentError("radius must be positive, got $R m"))
+    
     # The loop lies in the v–w plane, so only v and w constrain the radius; u only
     # has to fall inside the domain.
     config.nodes_u[1] <= cu <= config.nodes_u[end-2] ||
@@ -98,4 +122,12 @@ function _create_circular_loop_source(config, radius, center_u, center_v, center
         @warn "The circular coil is not divergence free" residual
  
     return J
+end
+
+# deprecated in 0.3.0: the loop is recorded in the history and returns its obj_id
+function create_circular_loop_source(config::FITDomain, args...; kwargs...)
+    Base.depwarn("`create_circular_loop_source` is deprecated, use \
+                  `id = create_circular_loop_source!(...)` and `J = get_source(domain, id)`",
+                 :create_circular_loop_source)
+    return get_source(config, create_circular_loop_source!(config, args...; kwargs...))
 end

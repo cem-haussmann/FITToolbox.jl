@@ -8,6 +8,7 @@ module FITToolbox
 using LinearAlgebra
 using SparseArrays
 using Base.Threads
+using TOML
 
 abstract type GridTopology end
 
@@ -29,7 +30,8 @@ include("CheckUnits.jl")
 
 # --- Domain ---
 include("CreateDomain.jl")
-include("CreateCube.jl")
+include("History.jl")
+include("CreateBrick.jl")
 include("CreateSphere.jl")
 
 # --- Operators ---
@@ -60,6 +62,9 @@ include("GetVacuumCFLTime.jl")
 # --- Wire ---
 include("CreateWire.jl")
 
+# --- Save domain and load domain ---
+include("SaveLoad.jl")
+
 # --- Plotting (implemented in ext/FITToolboxMakieExt.jl) ---
 """
     plot_nodal_values(config, ::Primal, data, normal::Direction; kwargs...)
@@ -78,6 +83,8 @@ function plot_nodal_values end
 # Domain
 export FITDomain
 export create_domain
+export list_objects
+export remove_object!, undo!, change_resolution, get_source
 
 # Operators
 export get_curl
@@ -86,8 +93,13 @@ export get_divergence
 
 # Create Objects
 export create_sphere!
-export create_cube!
-export create_circular_loop_source
+#export create_cube! # old call, deprecated, exported by Base.@deprecated
+export create_brick!
+export create_circular_loop_source!
+export create_circular_loop_source   # deprecated
+
+#Option to Load and Save Domain
+export save_domain, load_domain
 
 # Material matrices
 export get_conductivity

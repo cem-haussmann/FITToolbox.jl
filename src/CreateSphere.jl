@@ -2,24 +2,41 @@
 #Norman Haussmann (haussmann@uni-wuppertal.de), Chair of Electromagnetic Theory, University of Wuppertal
 #Date: 14/01/2026
 
-function create_sphere!(domain::FITDomain, u_o, v_o, w_o, radius; units="m", σ=0.0, ε_r=1.0, μ_r=1.0)
-    σ = Float64(σ)
-    ε_r = Float64(ε_r)
-    μ_r = Float64(μ_r)
-    unitToMeter = check_units(units)
-    start_pos_u = u_o * unitToMeter
-    start_pos_v = v_o * unitToMeter
-    start_pos_w = w_o * unitToMeter
-    r = radius * unitToMeter
+struct Sphere <: AbstractSolid
+    center::NTuple{3,Float64}
+    radius::Float64
+    material::Material
+end
 
-    r > 0 || throw(ArgumentError("radius must be positive, got $radius"))
+_describe_geometry(s::Sphere) = "center=$(_short(s.center)) radius=$(_short(s.radius))"
+_describe_material(s::Sphere) = _describe_material(s.material)
+
+function create_sphere!(domain::FITDomain, u_o, v_o, w_o, radius;
+                        units="m", σ=0.0, ε_r=1.0, μ_r=1.0,
+                        name::String="", color::Union{Nothing,String}=nothing)
+    unitToMeter = check_units(units)
+    sphere = Sphere((u_o*unitToMeter, v_o*unitToMeter, w_o*unitToMeter),
+                    radius*unitToMeter,
+                    Material(σ, ε_r, μ_r, color))
+    name = _resolve_name(domain, name)
+    _apply!(domain, sphere)
+    return _record_create!(domain, sphere; name)
+end
+
+function _apply!(domain::FITDomain, sphere::Sphere)
+    start_pos_u, start_pos_v, start_pos_w = sphere.center
+    r = sphere.radius
+    σ, ε_r, μ_r = sphere.material.σ, sphere.material.ε_r, sphere.material.μ_r
+
+    r > 0 || throw(ArgumentError("radius must be positive, got $r m"))
 
     # The centre must lie inside the grid; otherwise the sphere is missed entirely
     # or only partly captured, and without this check that goes unnoticed.
     (domain.nodes_u[1] <= start_pos_u <= domain.nodes_u[end] &&
      domain.nodes_v[1] <= start_pos_v <= domain.nodes_v[end] &&
      domain.nodes_w[1] <= start_pos_w <= domain.nodes_w[end]) ||
-        throw(ArgumentError("sphere centre ($u_o, $v_o, $w_o) $units lies outside the domain"))
+        throw(ArgumentError("sphere centre $(sphere.center) m lies outside the domain"))
+
 
     # A sphere reaching past the boundary is clipped. That can be intentional —
     # a half sphere at the edge — so warn rather than throw.
@@ -38,6 +55,8 @@ function create_sphere!(domain::FITDomain, u_o, v_o, w_o, radius; units="m", σ=
 
     # k outermost for threading (stride Nu*Nv, so threads write far apart),
     # i innermost because md is contiguous in i.
+    
+    filled = zeros(Int, Nw-1)  
     @threads for k in 1:Nw-1
         ww = (dw[k+1] - dw[k]) / 6.0
         w_samples = (dw[k] + ww, dw[k] + 3.0*ww, dw[k] + 5.0*ww)
@@ -62,14 +81,11 @@ function create_sphere!(domain::FITDomain, u_o, v_o, w_o, radius; units="m", σ=
                     md[i, j, k, 1] = σ
                     md[i, j, k, 2] = ε_r
                     md[i, j, k, 3] = μ_r
+                    filled[k] += 1
                 end
             end
         end
     end
 
-    (any(md[:, :, :, 1] .!= domain.σ)  ||
-     any(md[:, :, :, 2] .!= domain.ε_r) ||
-     any(md[:, :, :, 3] .!= domain.μ_r)) ||
-        @warn "no cells were filled — is the radius smaller than one cell?"
-    return domain
+    sum(filled) > 0 || @warn "no cells were filled — is the radius smaller than one cell?"
 end

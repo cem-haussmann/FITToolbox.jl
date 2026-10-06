@@ -38,7 +38,6 @@ Mν = get_reluctivity(domain)
 A  = get_curl(domain, Dual()) * Mν * get_curl(domain, Primal())   # curl–curl operator
 ```
 """
-
 function get_reluctivity(config)    
     Edge_U = config.edges_u
     Edge_V = config.edges_v

@@ -6,6 +6,88 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As long as
 the major version is 0, a change in the minor version marks a breaking release.
 
+## [0.3.0] - Unreleased
+
+This release records every object placed in a domain in a history. Objects can be named,
+listed, removed and undone; the whole model can be moved to another grid; and a domain
+can be saved to a file and loaded again. The functions that create objects now return
+the id of the new object.
+
+### Changed
+
+- **Breaking:** `create_cube!` is renamed to `create_brick!`. The old name still works,
+  but is deprecated.
+- **Breaking:** `create_brick!` and `create_sphere!` return the `obj_id` of the new
+  object. Previously `create_cube!` returned `nothing` and `create_sphere!` the domain.
+- **Breaking:** `create_circular_loop_source` is replaced by
+  `create_circular_loop_source!`, which records the loop in the domain and returns its
+  `obj_id`. The source vector comes from `get_source(domain, obj_id)` or
+  `get_source(domain, name)`, and the current is set with the new keyword `current`
+  (default 1 A) instead of by scaling the returned vector. The old name still returns
+  the vector, but is deprecated.
+- Deprecation warnings appear only when Julia runs with `--depwarn=yes`, as in
+  `Pkg.test`; by default the old names work silently.
+
+### Added
+
+- **History:** `create_brick!`, `create_sphere!` and `create_circular_loop_source!` are
+  recorded in the domain, each with a unique `obj_id`. The material is rebuilt from the
+  history whenever it changes.
+  - `list_objects(domain)` shows the existing objects as a table of id, type, name,
+    geometry and material, and can be indexed like a vector.
+  - `remove_object!(domain, obj_id)` and `remove_object!(domain, name)` remove an object.
+  - `undo!(domain)` reverts the last step: a created object is removed, a removed one
+    comes back.
+  - `change_resolution(domain, resolution)` and
+    `change_resolution(domain, Edges_U, Edges_V, Edges_W)` return a new domain with the
+    same extent and background material and the whole history replayed on the new grid,
+    equidistant or not. The original domain is not changed.
+  - `get_source(domain, obj_id)` and `get_source(domain, name)` return the source vector
+    of one source, discretized on the current grid.
+- **Names:** every create function takes a keyword `name`, which must be unique among
+  the existing objects. Unnamed objects are called `obj<id>`, a form reserved for them.
+- **Colours:** `create_brick!` and `create_sphere!` take a keyword `color`: a hex code
+  such as `"#B87333"` or a named colour, including `"copper"`, `"aluminium"` and
+  `"gold"`. Colours are stored with the object and shown by `list_objects`; the plotting
+  functions do not use them yet.
+- **Save and load:** `save_domain(path, domain)` writes the grid, the background
+  material and the full history to a human-readable TOML file; `load_domain(path)`
+  rebuilds the domain from it, with `undo!` still working. Files are checked on loading:
+  ids and names must be unique and every removal must refer to an existing object.
+  Values written directly into `domain.material` are not saved, and `save_domain` warns
+  if there are any.
+- **Complex currents:** `current` may be complex, e.g. a phasor in the frequency domain.
+  `get_source` then returns a `ComplexF64` vector; real currents keep `Float64`.
+- `create_circular_loop_source!` throws an `ArgumentError` for a radius that is not
+  positive, as `create_sphere!` does.
+- New dependency: the `TOML` standard library.
+- Test files:
+  - `test/history.jl`: recording, ids, names, removal, undo, change of resolution,
+    `list_objects` and `get_source`.
+  - `test/saveload.jl`: round trips, hand-written files and invalid or inconsistent
+    files.
+  - `test/objects.jl`: material filled by `create_brick!` and `create_sphere!`.
+  - `test/sources.jl`: complex currents and the deprecated `create_circular_loop_source`.
+  - `test/material_matrices.jl`: the aliases `M_σ`, `M_ε` and `M_ν`.
+
+### Fixed
+
+- The docstrings of `get_index_entity`, `get_reluctivity` and the dual-facet averaging
+  were separated from their functions by a blank line and therefore not attached to
+  them; they now show up in the help.
+
+### Documentation
+
+- The coil, eddy-current and SPFD dosimetry notebooks use `create_circular_loop_source!`
+  with `current` and `get_source`.
+- New notebook `examples/snippets/Domain_and_History.ipynb`.
+- New notebook `examples/static/E-Statics-Dielectric-Sphere.ipynb`: a dielectric sphere
+  in a uniform field on four grids via `change_resolution`, against the analytical
+  solution.
+- The examples find the package through a relative path in `examples/Project.toml`, so
+  they run from any clone. The first cell of each notebook sets up the environment, on
+  Julia 1.10 as well as on later versions.
+
 ## [0.2.0] - 2026-09-11
 
 This release corrects the material matrices at the domain boundary. Interior entries are
@@ -76,5 +158,6 @@ homogeneous Neumann, Robin, magnetic walls — change, mostly near the boundary.
 
 Initial registered release.
 
+[0.3.0]: https://github.com/cem-haussmann/FITToolbox.jl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cem-haussmann/FITToolbox.jl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cem-haussmann/FITToolbox.jl/releases/tag/v0.1.0

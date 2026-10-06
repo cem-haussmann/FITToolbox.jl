@@ -2,6 +2,65 @@
 #Norman Haussmann (haussmann@uni-wuppertal.de), Chair of Electromagnetic Theory, University of Wuppertal
 #Date: 16/09/2025
 
+abstract type AbstractFITObject end
+
+abstract type AbstractSolid  <: AbstractFITObject end
+abstract type AbstractSource <: AbstractFITObject end
+
+struct Material
+    σ::Float64
+    ε_r::Float64
+    μ_r::Float64
+    color::Union{Nothing,String}   # for plotting only; nothing = choose automatically
+
+    function Material(σ, ε_r, μ_r, color::Union{Nothing,AbstractString}=nothing)
+        color === nothing || _valid_color(color) ||
+            throw(ArgumentError("unknown color \"$color\": use a hex code like \"#B87333\" \
+                                 or one of $(join(sort(collect(keys(_NAMED_COLORS))), ", "))"))
+        new(σ, ε_r, μ_r, color === nothing      ? nothing :
+                         startswith(color, '#') ? String(color) : lowercase(color))
+    end
+end
+
+const _NAMED_COLORS = Dict(
+    "red"       => "#E41A1C", "lightred"   => "#FB9A99", "darkred"   => "#8B0000",
+    "green"     => "#2CA02C", "lightgreen" => "#B2DF8A", "darkgreen" => "#006400",
+    "blue"      => "#1F78B4", "lightblue"  => "#A6CEE3", "darkblue"  => "#08306B",
+    "orange"    => "#FF7F00", "yellow"     => "#FFD92F", "purple"    => "#6A3D9A",
+    "pink"      => "#F781BF", "cyan"       => "#17BECF", "brown"     => "#8C564B",
+    "gray"      => "#808080", "lightgray"  => "#D3D3D3", "darkgray"  => "#404040",
+    "black"     => "#000000", "white"      => "#FFFFFF",
+    # typical conductor colours
+    "copper"    => "#B87333", "aluminium"  => "#A8A9AD", "gold"      => "#D4AF37",
+)
+
+const _HEX_COLOR = r"^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
+_valid_color(c) = occursin(_HEX_COLOR, c) || haskey(_NAMED_COLORS, lowercase(c))
+
+# hex code for plotting; names are resolved through _NAMED_COLORS
+_color_hex(c::String) = startswith(c, '#') ? c : _NAMED_COLORS[lowercase(c)]
+
+# History types; they are needed by the FITDomain struct. The functions are in History.jl
+abstract type AbstractOperation end
+
+struct CreateObject <: AbstractOperation
+    obj_id::Int
+    name::String
+    object::AbstractFITObject
+end
+
+struct DeleteObject <: AbstractOperation
+    obj_id::Int
+end
+
+mutable struct DomainHistory
+    steps::Vector{AbstractOperation}   # step number = position in this vector
+    obj_counter::Int                   # last obj_id handed out
+end
+
+DomainHistory() = DomainHistory(AbstractOperation[], 0)
+
+
 function _cell_count(extent, res; rtol=1e-9)
     res > 0 || throw(ArgumentError("resolution must be positive, got $res"))
     n = round(Int, extent / res)
@@ -48,6 +107,7 @@ struct FITDomain{T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
     # Per-cell material distribution ((Nu-1) × (Nv-1) × (Nw-1) × 3)
     # index 4: 1 = σ, 2 = ε_r, 3 = μ_r
     material::Array{T, 4}
+    _history::DomainHistory
 
         function FITDomain(
             nodes_u::A, nodes_v::A, nodes_w::A,
@@ -57,7 +117,8 @@ struct FITDomain{T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
             primal_facets_u::M, primal_facets_v::M, primal_facets_w::M,
             dual_facets_u::M, dual_facets_v::M, dual_facets_w::M,
             σ::T, ε_r::T, μ_r::T,
-            material::Array{T, 4}
+            material::Array{T, 4},
+            history::DomainHistory = DomainHistory()
         ) where {T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
 
         Nu = length(nodes_u)
@@ -93,7 +154,8 @@ struct FITDomain{T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
             dual_facets_u, dual_facets_v, dual_facets_w,
             Nu, Nv, Nw, Np,
             σ, ε_r, μ_r,
-            material
+            material,
+            history
         )
     end
 end
@@ -196,4 +258,4 @@ function create_domain(Edges_U, Edges_V, Edges_W; units="m", σ=0.0, ε_r=1.0, �
         material
     )
     return domain
-end            
+end
