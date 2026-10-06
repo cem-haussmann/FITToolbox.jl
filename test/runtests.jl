@@ -20,6 +20,9 @@ const D = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0]; units="m")
     @test sum(D.dual_edges_u) ≈ 6.0        # dual edges tile the same extent
     # the float-division case that used to throw InexactError
     @test create_domain([0.3, 1.0, 1.0], [0.1, 0.1, 0.1]).Nu == 4
+    # three values each, else an error instead of a NaN in place of a domain
+    @test_throws "3 values each" create_domain([6.0, 8.0], [2.0, 2.0, 2.0])
+    @test_throws "3 values each" create_domain([6.0, 8.0, 10.0], [2.0, 2.0])
 end
 
 @testset "operator identities" begin
@@ -62,6 +65,19 @@ end
     end
     x, y, z = 2.3, 3.7, 4.1
     @test interpolate(D, DualNode(), f, x, y, z) ≈ 2x + 3y - z atol=1e-12
+
+    # within half a cell of the boundary there is no dual node beyond the point: the
+    # first or last dual cell is extrapolated linearly, without a warning
+    left  = @test_logs interpolate(D, DualNode(), f, 0.5, y, z)
+    right = @test_logs interpolate(D, DualNode(), f, 5.5, y, z)
+    @test left  ≈ 2*0.5 + 3y - z atol=1e-12
+    @test right ≈ 2*5.5 + 3y - z atol=1e-12
+
+    # outside the domain: NaN with a warning, for dual quantities as for primal ones
+    for (entity, p) in ((DualNode(), (-1.0, y, z)), (DualNode(), (x, 8.5, z)),
+                        (DualNode(), (x, y, 10.5)), (PrimalNode(), (7.0, y, z)))
+        @test isnan(@test_logs (:warn, r"outside of the domain") interpolate(D, entity, f, p...))
+    end
 end
 
 @testset "CFL" begin
@@ -87,6 +103,8 @@ end
     @test FITToolbox.check_units("mm") == 1e-3
     @test FITToolbox.check_units("μm") == 1e-6    # U+03BC greek mu
     @test FITToolbox.check_units("µm") == 1e-6    # U+00B5 micro sign
+    @test FITToolbox.check_units("km") == 1e3
+    @test_throws "unknown unit" FITToolbox.check_units("furlong")
 end
 
 @testset "dual volumes sit on primal nodes" begin
@@ -138,6 +156,7 @@ include("sources.jl")
 include("objects.jl")
 include("history.jl")
 include("saveload.jl")
+include("viewer.jl")
 
 
 @testset "plotting extension" begin
@@ -158,6 +177,12 @@ include("saveload.jl")
     @test fig2 isa Figure
 
     @test_throws DimensionMismatch plot_nodal_values(D, Primal(), f[1:end-1], DirZ())
+
+    # a fixed colour range, and a log scale that ignores zero and negative values
+    @test plot_nodal_values(D, Primal(), f, DirZ(); pos = 4.0, clip_range = (0.0, 10.0)) isa Figure
+    @test plot_nodal_values(D, Primal(), f, DirZ(); pos = 4.0, logscale = true) isa Figure
+    @test_throws "no positive values" plot_nodal_values(D, Primal(), -abs.(f) .- 1, DirZ();
+                                                        pos = 4.0, logscale = true)
 end
 
 end

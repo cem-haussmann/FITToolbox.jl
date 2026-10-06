@@ -6,17 +6,9 @@ function _find_dual_index(centers::AbstractVector, val::Real)
     n = length(centers)
     n < 2 && throw(ArgumentError("Need at least two dual nodes, got $n"))
 
-    lo, hi = first(centers), last(centers)
-    tol = 8 * eps(max(abs(lo), abs(hi)))   # scale-aware, unlike eps()
-
-    if val < lo - tol
-        @warn "Value is left of first dual node ($lo), clamping" maxlog=3
-        return 1
-    elseif val > hi + tol
-        @warn "Value is right of last dual node ($hi), clamping" maxlog=3
-        return n - 1
-    end
-
+    # Within half a cell of the boundary the point lies beyond the first or last dual
+    # node: the outermost pair is used and the value extrapolated over at most half a
+    # cell. Points outside the domain never get here (see _findPositionDual).
     return clamp(searchsortedlast(centers, val), 1, n - 1)
 end
 
@@ -42,7 +34,11 @@ function _findPositionPrimal(domain::FITDomain, x, y, z)
 end
 
 function _findPositionDual(domain::FITDomain, x, y, z)
-    # _clamp_dual_index already handles 1D bounds checking and clamping internally
+    # Outside the domain there is no value, as for the primal quantities: nothing,
+    # which the callers return as NaN (_findPositionPrimal warns).
+    isnothing(_findPositionPrimal(domain, x, y, z)) && return nothing
+    # Inside it, a point in the outermost half cell has a dual node on one side only;
+    # _find_dual_index then takes the outermost pair and the value is extrapolated.
     i_dual = _find_dual_index(domain.edges_u_center, x)
     j_dual = _find_dual_index(domain.edges_v_center, y)
     k_dual = _find_dual_index(domain.edges_w_center, z)

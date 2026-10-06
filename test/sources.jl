@@ -68,18 +68,50 @@ end
 end
 
 @testset "invalid requests" begin
-    @test_throws ArgumentError create_circular_loop_source!(d, R, cu, cv, cw, DirY())
-    @test_throws ArgumentError create_circular_loop_source!(d, R, cu, cv, cw, DirZ())
-
     # does not fit
     @test_throws ArgumentError create_circular_loop_source!(d, R, 19.5, cv, cw, DirX())   # plane beyond nodes_u[end-2]
     @test_throws ArgumentError create_circular_loop_source!(d, R, cu, 25.0, cw, DirX())   # v + R beyond the domain
     @test_throws ArgumentError create_circular_loop_source!(d, R, cu, cv, 5.0, DirX())    # w − R below zero
+    @test_throws "u-direction" create_circular_loop_source!(d, R, cu, cv, cw, DirY())     # u + R = 18.3 > 18
+    @test_throws "w-direction" create_circular_loop_source!(d, 5.0, cu, cv, 29.5, DirZ()) # plane beyond nodes_w[end-2]
+    @test_throws "radius must be positive" create_circular_loop_source!(d, -1.0, cu, cv, cw, DirX())
 
     # smaller than a cell: nothing to mark, with a warning
     id0 = @test_logs (:warn, r"No edges") create_circular_loop_source!(d, 0.1, 10.0, 15.0, 15.0, DirX())
     J0  = @test_logs (:warn, r"No edges") get_source(d, id0)
     @test iszero(J0)
+end
+
+@testset "all three normals" begin
+    # cubic grid, off-centre loop: m = ½ Σ r × dl over the marked edges is the
+    # magnetic moment of the staircase; for a positive current it points along the
+    # normal, with magnitude close to πR²
+    g = create_domain([30.0, 30.0, 30.0], [0.5, 0.5, 0.5])
+    function moment(J)
+        nodes, edges = (g.nodes_u, g.nodes_v, g.nodes_w), (g.edges_u, g.edges_v, g.edges_w)
+        m = zeros(3)
+        for p in findall(!iszero, J)
+            b, i, j, k = _wire_ijk(g, p)
+            from = [nodes[a][(i, j, k)[a]] for a in 1:3]
+            dl = [a == b ? edges[a][(i, j, k)[a]] : 0.0 for a in 1:3]
+            m .+= cross(from .+ dl ./ 2, dl) .* (J[p] / 2)
+        end
+        return m
+    end
+    centre = (14.3, 15.2, 14.9)
+    for (a, normal) in enumerate((DirX(), DirY(), DirZ()))
+        Jn = @test_logs _loop_source(g, 8.0, centre..., normal)          # and no warnings
+        @test iszero(get_gradient(g, Primal())' * Jn)                     # closed
+        @test all(x -> x == 1 || x == -1, Jn[findall(!iszero, Jn)])
+        m = moment(Jn)
+        @test m[a] ≈ π * 8.0^2 rtol = 0.03                               # along +normal
+        @test all(b -> abs(m[b]) < 1e-9 * m[a], filter(!=(a), 1:3))
+        # only in-plane edges, all in the node plane nearest to the centre
+        nz = [_wire_ijk(g, p) for p in findall(!iszero, Jn)]
+        @test all(t -> t[1] != a, nz)
+        plane = argmin(abs.((g.nodes_u, g.nodes_v, g.nodes_w)[a] .- centre[a]))
+        @test all(t -> t[a + 1] == plane, nz)
+    end
 end
 
 @testset "complex current" begin

@@ -165,21 +165,13 @@ function create_domain(domain_size, resolution; units="m", σ=0.0, ε_r=1.0, μ_
     ε_r = Float64(ε_r)
     μ_r  = Float64(μ_r)
 
-    if !(length(domain_size) in (3)) || length(resolution) != 3
-        @warn "The length of the domain vector (3) or resolution (3) is wrong"
-        return NaN
-    end
+    length(domain_size) == 3 && length(resolution) == 3 ||
+        throw(ArgumentError("domain_size and resolution need 3 values each (u, v, w), got \
+                             $(length(domain_size)) and $(length(resolution))"))
 
-    o = zeros(6)
-    if length(domain_size) == 3
-        o[2] = domain_size[1]
-        o[4] = domain_size[2]
-        o[6] = domain_size[3]
-    else
-        o=copy(domain_size)
-    end
-
-    _create_domain(o[1],o[2],o[3],o[4],o[5],o[6],resolution[1],resolution[2],resolution[3]; units=units, σ=σ, ε_r=ε_r, μ_r=μ_r)
+    # the domain starts at the origin
+    _create_domain(0.0, domain_size[1], 0.0, domain_size[2], 0.0, domain_size[3],
+                   resolution[1], resolution[2], resolution[3]; units=units, σ=σ, ε_r=ε_r, μ_r=μ_r)
 end
 
 #this is a basic implementation for equi-distant grids

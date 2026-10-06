@@ -33,6 +33,7 @@ include("CreateDomain.jl")
 include("History.jl")
 include("CreateBrick.jl")
 include("CreateSphere.jl")
+include("CreateCylinder.jl")
 
 # --- Operators ---
 include("_GetPuPvPw.jl")
@@ -76,6 +77,35 @@ before calling; the implementation lives in a package extension.
 """
 function plot_nodal_values end
 
+"""
+    view_domain(domain; size = (1100, 700)) -> Figure
+
+Interactive 3D view of the objects in `domain`, read from its history: bricks as
+boxes, spheres and cylinders as they are, and loop sources as circles, in their
+colours, inside the outline of the domain.
+
+The panel next to the scene has
+- a view menu: the objects as modelled, or the voxels, i.e. the cells each object
+  occupies on the grid (the later object wins where they overlap, as in the
+  material). Values written directly into `domain.material` are not shown;
+- a checkbox per object, in its colour, to show or hide it, or a checkbox per object
+  type when there are more than 15 objects;
+- "Show all"; a click on an object (without dragging) hides it and names it;
+- "Reset view", which brings the camera back to where it started;
+- a cut: a plane along x, y or z, moved over the grid nodes with a slider, which
+  hides everything beyond it. In the voxel view the cut face is filled with the
+  cells, showing the staircase in cross-section. The grid lines in the cut plane can
+  be shown;
+- for loop sources: the grid edges they occupy, as `get_source` uses them, and
+  optionally arrows for the direction of the current.
+
+Requires a Makie backend with a depth buffer: run `using GLMakie` (window) or
+`using WGLMakie` (notebook) before calling. CairoMakie cannot draw overlapping 3D
+objects correctly, so `view_domain` throws an error there. The implementation lives
+in a package extension.
+"""
+function view_domain end
+
 # -------------------------------------------------------
 # Exports
 # -------------------------------------------------------
@@ -93,6 +123,7 @@ export get_divergence
 
 # Create Objects
 export create_sphere!
+export create_cylinder!
 #export create_cube! # old call, deprecated, exported by Base.@deprecated
 export create_brick!
 export create_circular_loop_source!
@@ -119,7 +150,7 @@ export get_index_entity, get_position_of_index
 export get_vacuum_cfl_time
 
 # Plotting
-export plot_nodal_values
+export plot_nodal_values, view_domain
 
 export Direction, DirX, DirY, DirZ
 

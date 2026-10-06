@@ -90,6 +90,11 @@ function _step_to_dict(s::CreateObject)
     elseif o isa Sphere
         d["center"] = collect(o.center)
         d["radius"] = o.radius
+    elseif o isa Cylinder
+        d["base"]   = collect(o.base)
+        d["radius"] = o.radius
+        d["height"] = o.height
+        d["axis"]   = string(nameof(typeof(o.axis)))
     elseif o isa CircularLoop
         d["center"]  = collect(o.center)
         d["radius"]  = o.radius
@@ -107,6 +112,8 @@ function _step_to_dict(s::CreateObject)
     return d
 end
 
+const _DIRECTIONS = Dict("DirX" => DirX(), "DirY" => DirY(), "DirZ" => DirZ())
+
 function _step_from_dict(d)
     op = get(d, "op", "")
     op == "delete" && return DeleteObject(d["obj_id"])
@@ -117,8 +124,10 @@ function _step_from_dict(d)
         Brick(Tuple(d["origin"]), Tuple(d["lengths"]), material())
     elseif t == "Sphere"
         Sphere(Tuple(d["center"]), d["radius"], material())
+    elseif t == "Cylinder"
+        Cylinder(Tuple(d["base"]), d["radius"], d["height"], _DIRECTIONS[d["axis"]], material())
     elseif t == "CircularLoop"
-        normal = Dict("DirX" => DirX(), "DirY" => DirY(), "DirZ" => DirZ())[d["normal"]]
+        normal = _DIRECTIONS[d["normal"]]
         current = haskey(d, "current_im") ? complex(d["current"], d["current_im"]) : d["current"]
         CircularLoop(Tuple(d["center"]), d["radius"], normal, current)
     else

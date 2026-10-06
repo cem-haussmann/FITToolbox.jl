@@ -11,7 +11,8 @@ the major version is 0, a change in the minor version marks a breaking release.
 This release records every object placed in a domain in a history. Objects can be named,
 listed, removed and undone; the whole model can be moved to another grid; and a domain
 can be saved to a file and loaded again. The functions that create objects now return
-the id of the new object.
+the id of the new object. New are cylinders, loop sources along every axis, and an
+interactive 3D view of a model, as modelled and as the grid sees it.
 
 ### Changed
 
@@ -27,11 +28,16 @@ the id of the new object.
   the vector, but is deprecated.
 - Deprecation warnings appear only when Julia runs with `--depwarn=yes`, as in
   `Pkg.test`; by default the old names work silently.
+- `create_domain(domain_size, resolution)` throws an `ArgumentError` when either does
+  not have three values, instead of warning and returning `NaN`.
+- `interpolate` no longer warns for points within half a cell of the boundary. There, a
+  dual component has a dual node on one side only and is extrapolated from the
+  outermost pair, which is exact for linear fields; the warning called this "clamping".
 
 ### Added
 
-- **History:** `create_brick!`, `create_sphere!` and `create_circular_loop_source!` are
-  recorded in the domain, each with a unique `obj_id`. The material is rebuilt from the
+- **History:** `create_brick!`, `create_sphere!`, `create_cylinder!` and
+  `create_circular_loop_source!` are recorded in the domain, each with a unique `obj_id`. The material is rebuilt from the
   history whenever it changes.
   - `list_objects(domain)` shows the existing objects as a table of id, type, name,
     geometry and material, and can be indexed like a vector.
@@ -46,10 +52,27 @@ the id of the new object.
     of one source, discretized on the current grid.
 - **Names:** every create function takes a keyword `name`, which must be unique among
   the existing objects. Unnamed objects are called `obj<id>`, a form reserved for them.
-- **Colours:** `create_brick!` and `create_sphere!` take a keyword `color`: a hex code
-  such as `"#B87333"` or a named colour, including `"copper"`, `"aluminium"` and
-  `"gold"`. Colours are stored with the object and shown by `list_objects`; the plotting
-  functions do not use them yet.
+- **Colours:** `create_brick!`, `create_sphere!` and `create_cylinder!` take a keyword
+  `color`: a hex code such as `"#B87333"` or a named colour, including `"copper"`,
+  `"aluminium"` and `"gold"`. Colours are stored with the object, shown by
+  `list_objects` and used by `view_domain`.
+- **Cylinders:** `create_cylinder!(domain, u_b, v_b, w_b, radius, height, axis)`, a solid
+  circular cylinder from the centre of its base face along `DirX()`, `DirY()` or
+  `DirZ()`. Cells are filled by the same 50 % rule as for spheres.
+- **Loop sources along every axis:** `create_circular_loop_source!` takes `DirY()` and
+  `DirZ()` normals as well as `DirX()`; the current runs counter-clockwise about the
+  normal, so the magnetic moment points along it.
+- **Domain viewer:** `view_domain(domain)` shows the model interactively in 3D. It needs
+  a Makie backend with a depth buffer (GLMakie or WGLMakie) and refuses CairoMakie.
+  - A view menu switches between the objects as modelled and the voxels, i.e. the cells
+    each object occupies on the grid, drawn as surface meshes on the real, possibly
+    graded, cell boundaries.
+  - A checkbox per object, in its colour (per type above 15 objects), hides or shows it;
+    so does a click on the object. "Show all" and "Reset view" restore the defaults.
+  - A cut along x, y or z hides everything beyond a grid plane; in the voxel view the
+    cut face is filled with the cells. The grid lines in the cut plane can be shown.
+  - Loop sources can be drawn on the grid edges they occupy, with arrows for the
+    direction of the current.
 - **Save and load:** `save_domain(path, domain)` writes the grid, the background
   material and the full history to a human-readable TOML file; `load_domain(path)`
   rebuilds the domain from it, with `undo!` still working. Files are checked on loading:
@@ -66,12 +89,21 @@ the id of the new object.
     `list_objects` and `get_source`.
   - `test/saveload.jl`: round trips, hand-written files and invalid or inconsistent
     files.
-  - `test/objects.jl`: material filled by `create_brick!` and `create_sphere!`.
-  - `test/sources.jl`: complex currents and the deprecated `create_circular_loop_source`.
+  - `test/objects.jl`: material filled by `create_brick!`, `create_sphere!` and
+    `create_cylinder!`.
+  - `test/sources.jl`: complex currents, the three normals of a loop and the deprecated
+    `create_circular_loop_source`.
+  - `test/viewer.jl`: `view_domain` built with CairoMakie and every control operated:
+    colours, groups, cut, voxel labels and meshes, loop edges.
   - `test/material_matrices.jl`: the aliases `M_σ`, `M_ε` and `M_ν`.
 
 ### Fixed
 
+- `plot_nodal_values(...; logscale = true)` failed as soon as the slice contained zero or
+  negative values, which a potential routinely has. These values are now left out of the
+  heatmap.
+- `interpolate(domain, DualNode(), …)` returns `NaN` with a warning outside the domain,
+  like every other quantity. It used to extrapolate silently from the outermost cell.
 - The docstrings of `get_index_entity`, `get_reluctivity` and the dual-facet averaging
   were separated from their functions by a blank line and therefore not attached to
   them; they now show up in the help.
@@ -81,6 +113,8 @@ the id of the new object.
 - The coil, eddy-current and SPFD dosimetry notebooks use `create_circular_loop_source!`
   with `current` and `get_source`.
 - New notebook `examples/snippets/Domain_and_History.ipynb`.
+- New script `examples/snippets/View_Domain.jl`: a model with every object type in
+  `view_domain`. The examples environment includes GLMakie for it.
 - New notebook `examples/static/E-Statics-Dielectric-Sphere.ipynb`: a dielectric sphere
   in a uniform field on four grids via `change_resolution`, against the analytical
   solution.

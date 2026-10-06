@@ -162,8 +162,8 @@ end
     @test create_sphere!(d3, 10, 15, 15, 2) == 3
 
     # failed calls are not recorded
-    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirY())
-    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirZ())
+    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirY())  # u + R = 18.3 > nodes_u[end-2]
+    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 29.5, DirZ())  # plane beyond nodes_w[end-2]
     @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 19.5, 15.2, 14.9, DirX())  # plane beyond nodes_u[end-2]
     @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 25.0, 14.9, DirX())  # v + R beyond the domain
     @test length(d._history.steps) == 1

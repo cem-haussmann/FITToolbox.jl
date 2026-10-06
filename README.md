@@ -100,6 +100,14 @@ domain = create_domain(edges, edges, edges; units = "m")
 Worked notebooks are in `examples/`, ordered roughly by increasing difficulty.
 Each explains its own physics and numerics rather than presenting a finished
 recipe, and each compares against an analytical solution where one exists.
+They share the environment in `examples/`; the first cell of each notebook sets it up.
+
+**Building and viewing a model** (`examples/snippets/`)
+
+| Example | Topic |
+|---|---|
+| `Domain_and_History.ipynb` | Objects with names and colours, the object list, removing and undoing, real and complex sources, saving a model to a file and loading it again. |
+| `View_Domain.jl` | A model with every object type in the interactive 3D viewer `view_domain`: the objects as modelled and as the grid sees them, cuts, and loop sources on their grid edges. Opens a GLMakie window: `julia examples/snippets/View_Domain.jl`. |
 
 **Electrostatics** (`examples/static/`)
 
@@ -107,6 +115,7 @@ recipe, and each compares against an analytical solution where one exists.
 |---|---|
 | `E-Statics-PC-Neumann-Dirichlet.ipynb` | Point charge with homogeneous Neumann and Dirichlet conditions. Why the Neumann system is both singular and inconsistent, how gauge fixing and charge neutralisation differ, and what each boundary does to the field. |
 | `E-Statics-PC-Robin-Graded.ipynb` | Robin conditions, which prescribe the far-field decay instead of the value or the flux, and domain extension by graded cells. Compares the cost of each against the accuracy it buys. |
+| `E-Statics-Dielectric-Sphere.ipynb` | A dielectric sphere in a uniform field, solved on four grids with `change_resolution` and compared with the analytical solution. The staircase sphere converges, but not monotonically, and part of the remaining error comes from the finite box rather than the grid. |
 
 **Magnetostatics and eddy currents** (`examples/static/`, `examples/lf/`)
 
@@ -165,6 +174,12 @@ The original code predates the availability of capable LLMs and was written by
 hand. For the version presented here, LLMs were used for restructuring and
 tidying the code, for improving readability and consistency, for a large part of
 the comments in both the source and the example notebooks, and for this README.
+
+From release 0.3.0 on, LLMs were used more extensively, now also to generate code:
+large parts of the new features — the model history, saving and loading, cylinders
+and the domain viewer — and of their tests were written with an LLM. This code was
+checked thoroughly before it was adopted: against the test suite, against analytical
+solutions where they exist, and by review.
 
 All physics, all numerical methods and all design decisions remain the author's.
 Every LLM-suggested change was reviewed before being adopted. Users should nonetheless

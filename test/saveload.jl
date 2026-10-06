@@ -7,6 +7,10 @@
 
 using FITToolbox, Test
 
+# an object type save_domain does not know, standing in for a future one that was
+# not added to SaveLoad.jl (structs must be defined at top level)
+struct _UnsavableObject <: FITToolbox.AbstractFITObject end
+
 # a domain with every object type, a named and an unnamed object, a colour,
 # and a removed object, so the file contains a delete step
 function _saveload_domain(d)
@@ -247,5 +251,32 @@ end
         # allowed: a name freed by a delete, and the default name of its own obj_id
         @test [x.name for x in list_objects(load(file(2, brick(1, "a"), delete(1), brick(2, "a"))))] == ["a"]
         @test [x.name for x in list_objects(load(file(1, brick(1, "obj1"))))] == ["obj1"]
+    end
+end
+
+@testset "save/load: object type without save support" begin
+    # not a solid, so the rebuild check in save_domain skips it and the error comes
+    # from writing the step
+    d = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0])
+    push!(d._history.steps, FITToolbox.CreateObject(1, "new", _UnsavableObject()))
+    d._history.obj_counter = 1
+    mktempdir() do dir
+        path = joinpath(dir, "new.toml")
+        @test_throws "cannot save objects of type _UnsavableObject" save_domain(path, d)
+        @test !isfile(path)                      # nothing half-written
+    end
+end
+
+@testset "save/load: cylinders" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_cylinder!(d, 0.5, 0.5, 0.1, 0.15, 0.3, DirZ(); σ = 5.8e7, name = "rod", color = "copper")
+    create_cylinder!(d, 0.1, 0.3, 0.3, 0.1, 0.5, DirX(); ε_r = 4.0)
+    create_cylinder!(d, 0.7, 0.1, 0.7, 0.05, 0.8, DirY(); μ_r = 100.0)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "cyl.toml"), d)
+        @test occursin("axis = \"DirY\"", read(path, String))
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test e.material == d.material
     end
 end
