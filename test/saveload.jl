@@ -292,3 +292,28 @@ end
         @test all(get_source(e, id) == get_source(d, id) for id in 1:3)
     end
 end
+
+@testset "save/load: rectangular loops" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_rectangular_loop_source!(d, 0.2, 0.3, 0.4, 0.3, 0.2, DirZ(); current = 5.0, name = "frame")
+    create_rectangular_loop_source!(d, 0.5, 0.2, 0.2, (0.3, 0.4), DirY(); current = 1 - 2im)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "rect.toml"), d)
+        @test count("current_im", read(path, String)) == 1
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test all(get_source(e, id) == get_source(d, id) for id in 1:2)
+    end
+end
+
+@testset "save/load: polyline sources" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    @test_logs (:info, r"Open polyline") create_polyline_source!(d, [(0.1, 0.2, 0.3), (0.7, 0.6, 0.8), (0.4, 0.9, 0.5)];
+                                                                 current = 4.0, name = "open")
+    create_polyline_source!(d, [(0.2, 0.2, 0.3), (0.8, 0.2, 0.3), (0.5, 0.7, 0.3)]; closed = true, current = 1 + 1im)
+    mktempdir() do dir
+        e = load_domain(save_domain(joinpath(dir, "poly.toml"), d))
+        @test e._history.steps == d._history.steps
+        @test all(get_source(e, id) == get_source(d, id) for id in 1:2)
+    end
+end

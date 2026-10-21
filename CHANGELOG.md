@@ -37,7 +37,8 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 ### Added
 
 - **History:** `create_brick!`, `create_sphere!`, `create_cylinder!`,
-  `create_circular_loop_source!` and `create_electric_charge!` are recorded in the domain,
+  `create_circular_loop_source!`, `create_rectangular_loop_source!`,
+  `create_polyline_source!` and `create_electric_charge!` are recorded in the domain,
   each with a unique `obj_id`. The material is rebuilt from the
   history whenever it changes.
   - `list_objects(domain)` shows the existing objects as a table of id, type, name,
@@ -63,6 +64,19 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 - **Loop sources along every axis:** `create_circular_loop_source!` takes `DirY()` and
   `DirZ()` normals as well as `DirX()`; the current runs counter-clockwise about the
   normal, so the magnetic moment points along it.
+- **Rectangular loops:** `create_rectangular_loop_source!(domain, u_o, v_o, w_o, length_1,
+  length_2, normal)` (the lengths also as a tuple), a corner and two sides as for
+  `create_brick!`. The sides run along grid lines, so there is no staircase: the loop is
+  exactly the snapped rectangle, closed, with the moment exactly current × area along the
+  normal. Both loop types share the abstract type `AbstractLoopSource`.
+- **Polyline sources:** `create_polyline_source!(domain, points; closed = false)`, a wire
+  along straight pieces between the given points. Each piece becomes a path of primal
+  edges through the nodes nearest to the line, connected by construction (one edge per
+  step, within half a cell diagonal of the line), so a straight wire is two points. The
+  wire is divergence free except at the ends of an open polyline, where the current
+  enters and leaves the grid; an info message names them, and
+  `get_source_ends(domain, name)` returns them as node indices. Loops and polylines share
+  the abstract type `AbstractEdgeSource`.
 - **Point charges:** `create_electric_charge!(domain, u, v, w; charge)` records a point
   charge in the history; `charge` is required. `get_source` returns its charge
   vector of length `Np`, the right-hand side of the Poisson problem, with the charge in
@@ -76,8 +90,8 @@ interactive 3D view of a model, as modelled and as the grid sees it.
     so does a click on the object. "Show all" and "Reset view" restore the defaults.
   - A cut along x, y or z hides everything beyond a grid plane; in the voxel view the
     cut face is filled with the cells. The grid lines in the cut plane can be shown.
-  - Loop sources can be drawn on the grid edges they occupy, with arrows for the
-    direction of the current.
+  - Loop and polyline sources can be drawn on the grid edges they occupy, with arrows
+    for the direction of the current.
 - **Save and load:** `save_domain(path, domain)` writes the grid, the background
   material and the full history to a human-readable TOML file; `load_domain(path)`
   rebuilds the domain from it, with `undo!` still working. Files are checked on loading:

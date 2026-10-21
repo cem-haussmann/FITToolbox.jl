@@ -40,8 +40,11 @@ end
 const _CHARGE_COLORS = (positive = "#E41A1C", negative = "#1F78B4")
 
 # For objects without a colour of their own: Makie's Wong palette without its blues and
-# its vermilion, so that red and blue mean charges only, plus brown, grey and olive
-const _OBJECT_PALETTE = ["#E69F00", "#009E73", "#CC79A7", "#F0E442", "#8C564B", "#999999", "#BCBD22"]
+# its vermilion, so that red and blue mean charges only, extended to one colour for each
+# of the up to _MAX_OBJECT_TOGGLES objects that get a checkbox of their own
+const _OBJECT_PALETTE = ["#E69F00", "#009E73", "#CC79A7", "#F0E442", "#8C564B", "#999999", "#BCBD22",
+                         "#9467BD", "#1B7837", "#A6D96A", "#D2B48C", "#636363", "#FDB462",
+                         "#BEBADA", "#8DD3C7"]
 
 # The colour given to the object, red or blue for a charge by its sign, or the next one
 # from the object palette
@@ -84,6 +87,19 @@ function _cut_rectangle(lo, hi, axis::Int, pos)
 end
 
 # The loop as a polygon in its plane
+# The polyline as given, before snapping to the grid; closed back to its first point
+_loop_points(w::FITToolbox.PolylineSource) =
+    Point3f.(w.closed ? [collect(w.points); [w.points[1]]] : collect(w.points))
+
+# The rectangle as given (its four corners, closed), before snapping to the grid
+function _loop_points(r::FITToolbox.RectangularLoop)
+    a = _axis_index(r.normal)
+    p, q = filter(!=(a), (1, 2, 3))
+    corner(s, t) = Point3f(ntuple(d -> d == p ? r.origin[p] + s * r.lengths[1] :
+                                       d == q ? r.origin[q] + t * r.lengths[2] : r.origin[a], 3))
+    return [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1), corner(0, 0)]
+end
+
 function _loop_points(loop::FITToolbox.CircularLoop; n = 128)
     a = _axis_index(loop.normal)
     b, c = filter(!=(a), 1:3)
@@ -114,8 +130,8 @@ end
 # The primal edges a loop source occupies, from the same discretisation get_source
 # uses: the edges as pairs of points, their centres, and the direction of the current
 # on each (edge vector times the ±1 orientation, independent of the amplitude)
-function _loop_edges(domain, loop::FITToolbox.CircularLoop)
-    J = FITToolbox._circular_loop_unit_source(domain, loop, loop.normal)
+function _loop_edges(domain, loop::FITToolbox.AbstractEdgeSource)
+    J = FITToolbox._unit_source(domain, loop)
     nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
     edges = (domain.edges_u, domain.edges_v, domain.edges_w)
     segs, mids, dirs = Point3f[], Point3f[], Vec3f[]
@@ -246,7 +262,7 @@ _draw_object!(scene, s::FITToolbox.Sphere, color; kw...) =
           color, kw...)
 
 # the caller sets the linewidth: it changes when the loop is shown on its grid edges
-_draw_object!(scene, c::FITToolbox.CircularLoop, color; kw...) =
+_draw_object!(scene, c::FITToolbox.AbstractEdgeSource, color; kw...) =
     lines!(scene, _loop_points(c); color, kw...)
 
 # a dot of fixed screen size, at the given position or, with `at`, elsewhere (the node)
@@ -269,7 +285,7 @@ function _picked_id(plot_ids, plt)
     return nothing
 end
 
-function FITToolbox.view_domain(domain::FITToolbox.FITDomain; size = (1100, 700))
+function FITToolbox.view_domain(domain::FITToolbox.FITDomain; size = (1400, 750))
     _check_3d_backend()
     fig, _ = _view_figure(domain; size)
     return fig
@@ -277,7 +293,7 @@ end
 
 # The figure with all its controls, and the state they act on, for the tests:
 # CairoMakie cannot draw it, but can build it and run every callback.
-function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
+function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
 
     entries = FITToolbox.list_objects(domain).entries
     colors  = _object_colors(entries)
@@ -294,7 +310,7 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
     shown  = Dict(e.obj_id => Observable(true) for e in entries)
     planes = Observable(Plane3f[])
     plot_ids = IdDict{Any,Int}()
-    # switched by the "View" menu and the "Loops" toggles in the panel
+    # switched by the "View" menu and the "Currents" toggles in the panel
     voxel_mode = Observable(false)
     edges_on   = Observable(false)
     arrows_on  = Observable(false)
@@ -303,7 +319,7 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
     edges_shown = lift(|, edges_on, voxel_mode)
     for e in entries
         id, c = e.obj_id, colors[e.obj_id]
-        if e.object isa FITToolbox.CircularLoop
+        if e.object isa FITToolbox.AbstractEdgeSource
             # the exact circle, thin while the edges are shown on top of it
             plt = _draw_object!(ls, e.object, c; visible = shown[id], clip_planes = planes,
                                 linewidth = lift(on -> on ? 1 : 3, edges_shown))
@@ -346,7 +362,8 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
         plot_ids[plt] = id
     end
 
-    # --- panel ---
+    # --- panel, in two columns so that it fits the window: view and objects (up to
+    # _MAX_OBJECT_TOGGLES checkboxes) in the first, cut and currents in the second ---
     panel = GridLayout(fig[1, 2]; tellheight = false, valign = :top)
     row = 0
     Label(panel[row += 1, 1], "View"; font = :bold, halign = :left)
@@ -375,7 +392,8 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
         info[] = "Click an object to hide it"
     end
 
-    # --- cut ---
+    # --- second column: cut ---
+    panel, row = GridLayout(fig[1, 3]; tellheight = false, valign = :top), 0
     Label(panel[row += 1, 1:3], "Cut"; font = :bold, halign = :left)
     cut_on = _checkbox(panel[row += 1, 1], false)
     axis_menu = Menu(panel[row, 2:3]; options = ["x", "y", "z"], default = "z")
@@ -414,8 +432,8 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
                   visible = lift(&, cut_on.checked, grid_on.checked))
 
     # --- loops on the grid edges they occupy ---
-    if any(e -> e.object isa FITToolbox.CircularLoop, entries)
-        Label(panel[row += 1, 1:3], "Loops"; font = :bold, halign = :left)
+    if any(e -> e.object isa FITToolbox.AbstractEdgeSource, entries)
+        Label(panel[row += 1, 1:3], "Currents"; font = :bold, halign = :left)
         t = _checkbox(panel[row += 1, 1], false)
         Label(panel[row, 2:3], "on grid edges"; halign = :left)
         connect!(edges_on, t.checked)
@@ -447,6 +465,7 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
         return Consume(false)
     end
 
-    colsize!(fig.layout, 2, Fixed(280))
+    colsize!(fig.layout, 2, Fixed(270))
+    colsize!(fig.layout, 3, Fixed(250))
     return fig, (; ls, shown, voxels, voxel_mode, planes, plot_ids, info)
 end

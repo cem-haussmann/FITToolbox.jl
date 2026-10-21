@@ -6,6 +6,10 @@ abstract type AbstractFITObject end
 
 abstract type AbstractSolid  <: AbstractFITObject end
 abstract type AbstractSource <: AbstractFITObject end
+# currents on the primal edges; their unit source vector (±1 on the edges) is _unit_source
+abstract type AbstractEdgeSource <: AbstractSource end
+# closed current loops
+abstract type AbstractLoopSource <: AbstractEdgeSource end
 
 struct Material
     σ::Float64

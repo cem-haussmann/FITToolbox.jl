@@ -1,9 +1,9 @@
-# CreateWire.jl
+# CreateCircularLoop.jl (CreateWire.jl until 0.3.0)
 # Norman Haussmann (haussmann@uni-wuppertal.de)
 # Chair of Electromagnetic Theory, University of Wuppertal
 # Date: long time ago
 
-struct CircularLoop{T<:Union{Float64,ComplexF64}} <: AbstractSource
+struct CircularLoop{T<:Union{Float64,ComplexF64}} <: AbstractLoopSource
     center::NTuple{3,Float64}
     radius::Float64
     normal::Direction
@@ -36,8 +36,9 @@ it that is nearest to the centre, e.g. `u = const` nearest to `center_u` for `Di
 On the grid, the circle becomes a staircase: the boundary of all cells in that plane
 whose centres lie inside the radius. Every marked in-plane edge carries ±`current`,
 oriented counter-clockwise about the normal, i.e. with the magnetic moment along +u,
-+v or +w for a positive current. The loop is closed by construction, so `GᵀJ = 0` holds
-exactly. The enclosed area approaches πR² as the grid is refined.
++v or +w for a positive current. The loop is closed by construction, so its dual
+divergence `S̃J = 0` holds exactly. The enclosed area approaches πR² as the grid is
+refined.
 
 `radius` and the centre coordinates are given in `units`.
 
@@ -66,8 +67,9 @@ function create_circular_loop_source!(config::FITDomain, radius, center_u, cente
     return _record_create!(config, loop; name)
 end
 
-_discretize_source(config::FITDomain, loop::CircularLoop) =
-    loop.current .* _circular_loop_unit_source(config, loop, loop.normal)
+# the loop with ±1 on its edges; scaled by the current it is the source vector
+_unit_source(config::FITDomain, loop::CircularLoop) =
+    _circular_loop_unit_source(config, loop, loop.normal)
 
 function _circular_loop_unit_source(config, loop::CircularLoop, ::DirY)
     Nodes_U, Nodes_W = config.nodes_u, config.nodes_w
@@ -114,9 +116,9 @@ function _circular_loop_unit_source(config, loop::CircularLoop, ::DirY)
     any(!iszero, J) ||
         @warn "No edges were marked for the wire — is the radius smaller than one cell?"
  
-    # A current loop must be closed: GᵀJ = 0 is discrete current continuity, and
-    # the curl–curl system has no solution without it.
-    residual = norm(transpose(get_gradient(config, Primal())) * J)
+    # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
+    # continuity, and the curl–curl system has no solution without it.
+    residual = norm(get_divergence(config, Dual()) * J)
     residual > 1e-12 * norm(J) &&
         @warn "The circular coil is not divergence free" residual
  
@@ -167,9 +169,9 @@ function _circular_loop_unit_source(config, loop::CircularLoop, ::DirX)
     any(!iszero, J) ||
         @warn "No edges were marked for the wire — is the radius smaller than one cell?"
  
-    # A current loop must be closed: GᵀJ = 0 is discrete current continuity, and
-    # the curl–curl system has no solution without it.
-    residual = norm(transpose(get_gradient(config, Primal())) * J)
+    # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
+    # continuity, and the curl–curl system has no solution without it.
+    residual = norm(get_divergence(config, Dual()) * J)
     residual > 1e-12 * norm(J) &&
         @warn "The circular coil is not divergence free" residual
  
@@ -221,9 +223,9 @@ function _circular_loop_unit_source(config, loop::CircularLoop, ::DirZ)
     any(!iszero, J) ||
         @warn "No edges were marked for the wire — is the radius smaller than one cell?"
 
-    # A current loop must be closed: GᵀJ = 0 is discrete current continuity, and
-    # the curl–curl system has no solution without it.
-    residual = norm(transpose(get_gradient(config, Primal())) * J)
+    # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
+    # continuity, and the curl–curl system has no solution without it.
+    residual = norm(get_divergence(config, Dual()) * J)
     residual > 1e-12 * norm(J) &&
         @warn "The circular coil is not divergence free" residual
 

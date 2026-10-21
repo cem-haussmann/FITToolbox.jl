@@ -31,6 +31,13 @@ end
     @test colors[3] == _VIEW._OBJECT_PALETTE[3]                      # sources too
     # the palette keeps clear of the charge colours, and of the Wong blues and vermilion
     @test isdisjoint(_VIEW._OBJECT_PALETTE, [values(_VIEW._CHARGE_COLORS)..., "#0072B2", "#56B4E9", "#D55E00"])
+    # one distinct colour for every object that gets its own checkbox
+    @test allunique(_VIEW._OBJECT_PALETTE) && length(_VIEW._OBJECT_PALETTE) >= _VIEW._MAX_OBJECT_TOGGLES
+    m = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    for k in 1:_VIEW._MAX_OBJECT_TOGGLES
+        create_sphere!(m, 0.05 + 0.06k, 0.5, 0.5, 0.03)
+    end
+    @test allunique(values(_VIEW._object_colors(list_objects(m).entries)))
 
     # up to 15 objects: one toggle per object, with its colour
     groups = _VIEW._toggle_groups(entries, colors)
@@ -178,6 +185,7 @@ end
     axis_menu = only(b for b in fig.content if b isa Menu && "y" in b.options[])
     slider = only(b for b in fig.content if b isa Slider)
     @test length(boxes) == 8
+    @test Makie.ncols(fig.layout) == 3                         # scene and a panel of two columns
     visible(id) = sort([p.visible[] for (p, i) in st.plot_ids if i == id])
 
     # objects view: each solid has its object shown and its voxels hidden; the loop
@@ -279,4 +287,37 @@ end
     # hidden with its checkbox like any object
     [b for b in fig.content if b isa Checkbox][2].checked[] = false
     @test !any(p.visible[] for p in dots)
+end
+
+@testset "view_domain: rectangular loops" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    create_rectangular_loop_source!(d, 0.23, 0.31, 0.4, 0.38, 0.29, DirZ(); name = "frame")
+    r = only(list_objects(d)).object
+    # the outline as given, before snapping
+    pts = _VIEW._loop_points(r)
+    @test length(pts) == 5 && pts[1] == pts[end]
+    @test extrema(p[1] for p in pts) == (0.23f0, 0.61f0) && all(p -> p[3] ≈ 0.4f0, pts)
+    # the edges as the solver sees them: on the snapped rectangle 0.2 … 0.6 × 0.3 … 0.6
+    segs, _, _ = _VIEW._loop_edges(d, r)
+    @test length(segs) == 2 * count(!iszero, get_source(d, "frame"))
+    @test extrema(p[1] for p in segs) == (0.2f0, 0.6f0) && extrema(p[2] for p in segs) == (0.3f0, 0.6f0)
+    # drawn like the circular loop, with the loop options in the panel
+    fig, st = _VIEW._view_figure(d)
+    @test count(b -> b isa Checkbox, fig.content) == 1 + 2 + 2          # object, cut + grid, loops
+    @test length([p for (p, i) in st.plot_ids if i == 1]) == 3          # outline, edges, arrows
+end
+
+@testset "view_domain: polyline sources" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test_logs (:info, r"Open polyline") create_polyline_source!(d, [(0.1, 0.2, 0.5), (0.9, 0.7, 0.5)]; name = "wire")
+    create_polyline_source!(d, [(0.2, 0.2, 0.3), (0.8, 0.2, 0.3), (0.5, 0.7, 0.3)]; closed = true)
+    open_w, tri = (e.object for e in list_objects(d))
+    @test length(_VIEW._loop_points(open_w)) == 2                      # as given, open
+    tp = _VIEW._loop_points(tri)
+    @test length(tp) == 4 && tp[1] == tp[end]                           # closed back to the start
+    segs, _, _ = _VIEW._loop_edges(d, open_w)
+    @test length(segs) == 2 * count(!iszero, get_source(d, "wire"))
+    fig, st = _VIEW._view_figure(d)
+    @test any(b -> b isa Label && b.text[] == "Currents", fig.content)  # the panel's current options
+    @test length([p for (p, i) in st.plot_ids if i == 1]) == 3          # line, edges, arrows
 end

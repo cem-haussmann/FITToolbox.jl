@@ -98,6 +98,17 @@ function _step_to_dict(s::CreateObject)
     elseif o isa PointCharge
         d["position"] = collect(o.position)
         d["charge"]   = o.charge
+    elseif o isa PolylineSource
+        d["points"]  = [collect(p) for p in o.points]
+        d["closed"]  = o.closed
+        d["current"] = real(o.current)
+        o.current isa Complex && (d["current_im"] = imag(o.current))   # TOML has no complex numbers
+    elseif o isa RectangularLoop
+        d["origin"]  = collect(o.origin)
+        d["lengths"] = collect(o.lengths)
+        d["normal"]  = string(nameof(typeof(o.normal)))
+        d["current"] = real(o.current)
+        o.current isa Complex && (d["current_im"] = imag(o.current))   # TOML has no complex numbers
     elseif o isa CircularLoop
         d["center"]  = collect(o.center)
         d["radius"]  = o.radius
@@ -131,6 +142,12 @@ function _step_from_dict(d)
         Cylinder(Tuple(d["base"]), d["radius"], d["height"], _DIRECTIONS[d["axis"]], material())
     elseif t == "PointCharge"
         PointCharge(Tuple(d["position"]), d["charge"])
+    elseif t == "PolylineSource"
+        current = haskey(d, "current_im") ? complex(d["current"], d["current_im"]) : d["current"]
+        PolylineSource([Tuple(Float64.(p)) for p in d["points"]], d["closed"], current)
+    elseif t == "RectangularLoop"
+        current = haskey(d, "current_im") ? complex(d["current"], d["current_im"]) : d["current"]
+        RectangularLoop(Tuple(d["origin"]), Tuple(d["lengths"]), _DIRECTIONS[d["normal"]], current)
     elseif t == "CircularLoop"
         normal = _DIRECTIONS[d["normal"]]
         current = haskey(d, "current_im") ? complex(d["current"], d["current_im"]) : d["current"]

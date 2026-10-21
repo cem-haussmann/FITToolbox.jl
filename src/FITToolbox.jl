@@ -61,7 +61,9 @@ include("GetPositionOfIndex.jl")
 include("GetVacuumCFLTime.jl")
 
 # --- Wire ---
-include("CreateWire.jl")
+include("CreateCircularLoop.jl")
+include("CreateRectangularLoop.jl")
+include("CreatePolylineSource.jl")
 include("CreateElectricCharge.jl")
 
 # --- Save domain and load domain ---
@@ -79,10 +81,10 @@ before calling; the implementation lives in a package extension.
 function plot_nodal_values end
 
 """
-    view_domain(domain; size = (1100, 700)) -> Figure
+    view_domain(domain; size = (1400, 750)) -> Figure
 
 Interactive 3D view of the objects in `domain`, read from its history: bricks as
-boxes, spheres and cylinders as they are, loop sources as circles and point charges
+boxes, spheres and cylinders as they are, loop sources as their outline and point charges
 as dots (red positive, blue negative), in their colours, inside the outline of the
 domain. In the voxel view a charge sits on the node that receives it.
 
@@ -98,8 +100,8 @@ The panel next to the scene has
   hides everything beyond it. In the voxel view the cut face is filled with the
   cells, showing the staircase in cross-section. The grid lines in the cut plane can
   be shown;
-- for loop sources: the grid edges they occupy, as `get_source` uses them, and
-  optionally arrows for the direction of the current.
+- for loop and polyline sources: the grid edges they occupy, as `get_source` uses
+  them, and optionally arrows for the direction of the current.
 
 Requires a Makie backend with a depth buffer: run `using GLMakie` (window) or
 `using WGLMakie` (notebook) before calling. CairoMakie cannot draw overlapping 3D
@@ -129,6 +131,8 @@ export create_cylinder!
 #export create_cube! # old call, deprecated, exported by Base.@deprecated
 export create_brick!
 export create_circular_loop_source!
+export create_rectangular_loop_source!
+export create_polyline_source!, get_source_ends
 export create_electric_charge!
 export create_circular_loop_source   # deprecated
 

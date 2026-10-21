@@ -193,8 +193,9 @@ end
     get_source(domain, obj_id) -> Vector
 
 Source vector of one source in `domain`, discretized on the current grid: for a loop
-from `create_circular_loop_source!` the current vector, length `3Np` in the edge layout,
-scaled by its `current`; for a point charge from `create_electric_charge!` the charge
+from `create_circular_loop_source!` or `create_rectangular_loop_source!` and a wire from
+`create_polyline_source!` the current vector, length `3Np` in the edge layout, scaled by
+its `current`; for a point charge from `create_electric_charge!` the charge
 vector, length `Np`, with the charge in the dual volume of the nearest node. The element
 type is `ComplexF64` for a complex current, else `Float64`.
 
@@ -204,6 +205,11 @@ obtained earlier is not updated by these.
 Throws an `ArgumentError` if no such object exists or it is not a source.
 """
 get_source(domain::FITDomain, name::AbstractString) = get_source(domain, _entry(domain, name).obj_id)
+
+# Every current on edges (circular and rectangular loops, polylines): its ±1 vector on
+# the edges, scaled by the current. Each type provides _unit_source.
+_discretize_source(config::FITDomain, src::AbstractEdgeSource) =
+    src.current .* _unit_source(config, src)
 
 function get_source(domain::FITDomain, obj_id::Int)
     e = _entry(domain, obj_id)
