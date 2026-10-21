@@ -192,9 +192,11 @@ end
     get_source(domain, name)   -> Vector
     get_source(domain, obj_id) -> Vector
 
-Source vector of one source in `domain`, e.g. from `create_circular_loop_source!`,
-discretized on the current grid and scaled by its `current`. Length `3Np` in the
-edge layout. The element type is `ComplexF64` for a complex `current`, else `Float64`.
+Source vector of one source in `domain`, discretized on the current grid: for a loop
+from `create_circular_loop_source!` the current vector, length `3Np` in the edge layout,
+scaled by its `current`; for a point charge from `create_electric_charge!` the charge
+vector, length `Np`, with the charge in the dual volume of the nearest node. The element
+type is `ComplexF64` for a complex current, else `Float64`.
 
 Call it again after `change_resolution`, `remove_object!` or `undo!`: a vector
 obtained earlier is not updated by these.

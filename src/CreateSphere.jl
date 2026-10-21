@@ -32,17 +32,17 @@ function _apply!(domain::FITDomain, sphere::Sphere)
 
     # The centre must lie inside the grid; otherwise the sphere is missed entirely
     # or only partly captured, and without this check that goes unnoticed.
-    (domain.nodes_u[1] <= start_pos_u <= domain.nodes_u[end] &&
-     domain.nodes_v[1] <= start_pos_v <= domain.nodes_v[end] &&
-     domain.nodes_w[1] <= start_pos_w <= domain.nodes_w[end]) ||
+    (_within(start_pos_u, domain.nodes_u) &&
+     _within(start_pos_v, domain.nodes_v) &&
+     _within(start_pos_w, domain.nodes_w)) ||
         throw(ArgumentError("sphere centre $(sphere.center) m lies outside the domain"))
 
 
     # A sphere reaching past the boundary is clipped. That can be intentional —
     # a half sphere at the edge — so warn rather than throw.
-    (start_pos_u - r < domain.nodes_u[1] || start_pos_u + r > domain.nodes_u[end] ||
-     start_pos_v - r < domain.nodes_v[1] || start_pos_v + r > domain.nodes_v[end] ||
-     start_pos_w - r < domain.nodes_w[1] || start_pos_w + r > domain.nodes_w[end]) &&
+    !(_within(start_pos_u - r, domain.nodes_u) && _within(start_pos_u + r, domain.nodes_u) &&
+      _within(start_pos_v - r, domain.nodes_v) && _within(start_pos_v + r, domain.nodes_v) &&
+      _within(start_pos_w - r, domain.nodes_w) && _within(start_pos_w + r, domain.nodes_w)) &&
         @warn "sphere extends beyond the domain and will be clipped" radius=r centre=(start_pos_u, start_pos_v, start_pos_w)
 
     Nu, Nv, Nw = domain.Nu, domain.Nv, domain.Nw

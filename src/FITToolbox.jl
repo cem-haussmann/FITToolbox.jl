@@ -62,6 +62,7 @@ include("GetVacuumCFLTime.jl")
 
 # --- Wire ---
 include("CreateWire.jl")
+include("CreateElectricCharge.jl")
 
 # --- Save domain and load domain ---
 include("SaveLoad.jl")
@@ -81,8 +82,9 @@ function plot_nodal_values end
     view_domain(domain; size = (1100, 700)) -> Figure
 
 Interactive 3D view of the objects in `domain`, read from its history: bricks as
-boxes, spheres and cylinders as they are, and loop sources as circles, in their
-colours, inside the outline of the domain.
+boxes, spheres and cylinders as they are, loop sources as circles and point charges
+as dots (red positive, blue negative), in their colours, inside the outline of the
+domain. In the voxel view a charge sits on the node that receives it.
 
 The panel next to the scene has
 - a view menu: the objects as modelled, or the voxels, i.e. the cells each object
@@ -127,6 +129,7 @@ export create_cylinder!
 #export create_cube! # old call, deprecated, exported by Base.@deprecated
 export create_brick!
 export create_circular_loop_source!
+export create_electric_charge!
 export create_circular_loop_source   # deprecated
 
 #Option to Load and Save Domain

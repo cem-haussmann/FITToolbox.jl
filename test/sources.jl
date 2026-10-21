@@ -162,3 +162,65 @@ end
 end
 
 end
+
+@testset "loop reaching its limit exactly" begin
+    # 0.2 + 0.1 = 0.30000000000000004 > 0.3 = nodes_v[end-2] without the slack
+    d = create_domain([0.3, 0.4, 0.4], [0.05, 0.05, 0.05])
+    @test 0.2 + 0.1 > d.nodes_v[end-2]
+    @test create_circular_loop_source!(d, 0.1, 0.1, 0.2, 0.2, DirX()) == 1
+    @test iszero(get_gradient(d, Primal())' * get_source(d, 1))
+end
+
+@testset "point charge" begin
+    mk() = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0])
+    node(d, i, j, k) = i + (j-1)*d.Nu + (k-1)*d.Nu*d.Nv
+    d = mk()
+
+    # the charge must be given
+    @test_throws UndefKeywordError create_electric_charge!(d, 4.0, 4.0, 6.0)
+    @test isempty(d._history.steps)
+
+    # on a node: the charge in that node's dual volume
+    id = create_electric_charge!(d, 4.0, 4.0, 6.0; charge = 1.602176634e-19, name = "proton")
+    @test id == 1 && only(list_objects(d)).object isa FITToolbox.PointCharge
+    q = get_source(d, "proton")
+    @test q isa Vector{Float64} && length(q) == d.Np
+    @test count(!iszero, q) == 1 && q[node(d, 3, 3, 4)] == 1.602176634e-19
+    @test q == get_source(d, id)
+    @test findfirst(!iszero, q) == get_index_entity(d, DualVolume(), 4.0, 4.0, 6.0)
+
+    # off the grid: the nearest node, without a warning; units; a negative charge
+    @test_logs create_electric_charge!(d, 2900.0, 4900.0, 5100.0; units = "mm",
+                                       charge = -2e-9, name = "q2")
+    q2 = get_source(d, "q2")
+    @test findfirst(!iszero, q2) == node(d, 2, 3, 4) && sum(q2) == -2e-9
+
+    # real only: a complex charge is rejected
+    @test_throws TypeError create_electric_charge!(d, 0.0, 0.0, 0.0; charge = 1 + 2im)
+    create_electric_charge!(d, 0.0, 0.0, 0.0; charge = 3, name = "corner")   # an Int is fine
+    @test get_source(d, "corner")[1] === 3.0
+
+    # in the object table
+    table = repr(MIME"text/plain"(), list_objects(d))
+    @test occursin("position=(4.0, 4.0, 6.0)", table) && occursin("q=-2.0e-9 C", table)
+
+    # outside the domain: an error, nothing recorded; the boundary itself is allowed
+    n = length(d._history.steps)
+    @test_throws "outside the domain" create_electric_charge!(d, 7.0, 4.0, 5.0; charge = 1.602176634e-19)
+    @test length(d._history.steps) == n
+    @test create_electric_charge!(d, 6.0, 8.0, 10.0; charge = 1.602176634e-19) == 4
+    @test get_source(d, 4)[end] == 1.602176634e-19
+
+    # a source, not a material
+    @test all(d.material[:, :, :, 2] .== 1.0)
+
+    # on another grid: the nearest node of that grid
+    fine = change_resolution(d, 1.0)
+    @test findfirst(!iszero, get_source(fine, "q2")) == node(fine, 4, 6, 6)
+
+    # removed and brought back like any object
+    remove_object!(d, "q2")
+    @test_throws ArgumentError get_source(d, "q2")
+    undo!(d)
+    @test get_source(d, "q2") == q2
+end

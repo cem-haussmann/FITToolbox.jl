@@ -36,8 +36,9 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 
 ### Added
 
-- **History:** `create_brick!`, `create_sphere!`, `create_cylinder!` and
-  `create_circular_loop_source!` are recorded in the domain, each with a unique `obj_id`. The material is rebuilt from the
+- **History:** `create_brick!`, `create_sphere!`, `create_cylinder!`,
+  `create_circular_loop_source!` and `create_electric_charge!` are recorded in the domain,
+  each with a unique `obj_id`. The material is rebuilt from the
   history whenever it changes.
   - `list_objects(domain)` shows the existing objects as a table of id, type, name,
     geometry and material, and can be indexed like a vector.
@@ -62,6 +63,10 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 - **Loop sources along every axis:** `create_circular_loop_source!` takes `DirY()` and
   `DirZ()` normals as well as `DirX()`; the current runs counter-clockwise about the
   normal, so the magnetic moment points along it.
+- **Point charges:** `create_electric_charge!(domain, u, v, w; charge)` records a point
+  charge in the history; `charge` is required. `get_source` returns its charge
+  vector of length `Np`, the right-hand side of the Poisson problem, with the charge in
+  the dual volume of the nearest node.
 - **Domain viewer:** `view_domain(domain)` shows the model interactively in 3D. It needs
   a Makie backend with a depth buffer (GLMakie or WGLMakie) and refuses CairoMakie.
   - A view menu switches between the objects as modelled and the voxels, i.e. the cells
@@ -99,6 +104,10 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 
 ### Fixed
 
+- Objects, charges and interpolation points exactly on the far boundary of the domain
+  were rejected, or interpolated as outside, when the last node fell below the requested
+  extent by rounding (ten cells of 0.1 m end at 0.9999999999999999 m). Positions are now
+  compared with the nodes up to 10⁻⁹ of the domain length.
 - `plot_nodal_values(...; logscale = true)` failed as soon as the slice contained zero or
   negative values, which a potential routinely has. These values are now left out of the
   heatmap.

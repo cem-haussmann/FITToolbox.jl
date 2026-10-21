@@ -280,3 +280,15 @@ end
         @test e.material == d.material
     end
 end
+
+@testset "save/load: point charges" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    create_electric_charge!(d, 0.5, 0.5, 0.5; charge = 1.602176634e-19, name = "proton")
+    create_electric_charge!(d, 0.23, 0.71, 0.4; charge = -3e-9)
+    create_electric_charge!(d, 0.1, 0.1, 0.9; charge = 2e-9, name = "q3")
+    mktempdir() do dir
+        e = load_domain(save_domain(joinpath(dir, "charges.toml"), d))
+        @test e._history.steps == d._history.steps
+        @test all(get_source(e, id) == get_source(d, id) for id in 1:3)
+    end
+end

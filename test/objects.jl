@@ -65,3 +65,19 @@ end
     # reaching past the boundary: clipped, with a warning
     @test_logs (:warn, r"clipped") create_cylinder!(e, 0.5, 0.5, 0.8, 0.1, 0.4, DirZ())
 end
+
+@testset "objects reaching the boundary exactly" begin
+    # ten cells of 0.1 m end at 0.9999999999999999 m: objects up to 1.0 m must still fit
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test d.nodes_u[end] < 1.0                                         # the rounding this is about
+    @test create_brick!(d, 0.0, 0.0, 0.0, 1.0, 1.0, 0.1; ε_r = 2.0) == 1
+    @test all(d.material[:, :, 1, 2] .== 2.0)                         # every cell of the bottom layer
+    @test_logs create_cylinder!(d, 0.5, 0.5, 0.0, 0.2, 1.0, DirZ())   # up to the top: not clipped
+    @test_logs (:warn, r"clipped") create_sphere!(d, 1.0, 0.5, 0.5, 0.2)   # centre on the boundary
+    @test create_electric_charge!(d, 1.0, 1.0, 1.0; charge = 1e-9) == 4
+    @test get_source(d, 4)[end] == 1e-9                               # the last node
+
+    # still an error beyond it
+    @test_throws "beyond the domain" create_brick!(d, 0.0, 0.0, 0.0, 1.001, 1.0, 0.1)
+    @test_throws "outside the domain" create_electric_charge!(d, 1.001, 0.5, 0.5; charge = 1e-9)
+end

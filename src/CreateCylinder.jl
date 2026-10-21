@@ -68,7 +68,7 @@ function _apply!(domain::FITDomain, cyl::Cylinder)
     nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
     # The base must lie inside the grid; otherwise the cylinder is missed entirely
     # or only partly captured, and without this check that goes unnoticed.
-    all(d -> nodes[d][1] <= cyl.base[d] <= nodes[d][end], 1:3) ||
+    all(d -> _within(cyl.base[d], nodes[d]), 1:3) ||
         throw(ArgumentError("cylinder base $(cyl.base) m lies outside the domain"))
 
     a = _axis_index(cyl.axis)                 # along the axis
@@ -76,8 +76,8 @@ function _apply!(domain::FITDomain, cyl::Cylinder)
 
     # Reaching past the boundary clips the cylinder. That can be intentional — a rod
     # through the whole domain — so warn rather than throw.
-    (cyl.base[a] + H > nodes[a][end] ||
-     any(d -> cyl.base[d] - R < nodes[d][1] || cyl.base[d] + R > nodes[d][end], (b, c))) &&
+    !(_within(cyl.base[a] + H, nodes[a]) &&
+      all(d -> _within(cyl.base[d] - R, nodes[d]) && _within(cyl.base[d] + R, nodes[d]), (b, c))) &&
         @warn "cylinder extends beyond the domain and will be clipped" radius=R height=H base=cyl.base
 
     Nu, Nv, Nw = domain.Nu, domain.Nv, domain.Nw

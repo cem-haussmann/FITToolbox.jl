@@ -27,8 +27,10 @@ end
     entries = list_objects(d).entries
     colors = _VIEW._object_colors(entries)
     @test colors[1] == "#B87333"                                     # "copper", resolved
-    @test colors[2] == Makie.wong_colors()[2]                        # no colour: palette
-    @test colors[3] == Makie.wong_colors()[3]                        # sources too
+    @test colors[2] == _VIEW._OBJECT_PALETTE[2]                      # no colour: palette
+    @test colors[3] == _VIEW._OBJECT_PALETTE[3]                      # sources too
+    # the palette keeps clear of the charge colours, and of the Wong blues and vermilion
+    @test isdisjoint(_VIEW._OBJECT_PALETTE, [values(_VIEW._CHARGE_COLORS)..., "#0072B2", "#56B4E9", "#D55E00"])
 
     # up to 15 objects: one toggle per object, with its colour
     groups = _VIEW._toggle_groups(entries, colors)
@@ -249,4 +251,32 @@ end
     @test count(b -> b isa Checkbox, first(_VIEW._view_figure(m)).content) == 1 + 2
     @test count(b -> b isa Checkbox, first(_VIEW._view_figure(create_domain([1.0, 1.0, 1.0],
                                                                  [0.1, 0.1, 0.1]))).content) == 2
+end
+
+@testset "view_domain: point charges" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    create_sphere!(d, 0.5, 0.5, 0.5, 0.2; ε_r = 4.0, name = "ball")
+    create_electric_charge!(d, 0.23, 0.71, 0.4; charge = 1.602176634e-19, name = "plus")   # off the grid
+    create_electric_charge!(d, 0.8, 0.2, 0.3; charge = -1e-9, name = "minus")
+
+    # red for positive, blue for negative, also in the checkboxes
+    colors = _VIEW._object_colors(list_objects(d).entries)
+    @test colors[2] == "#E41A1C" && colors[3] == "#1F78B4"
+
+    # the node that receives the charge
+    @test all(_VIEW._charge_node_point(d, list_objects(d)[2].object) .≈ (0.2, 0.7, 0.4))
+
+    # objects view: the dot at the given position; voxel view: on that node
+    fig, st = _VIEW._view_figure(d)
+    dots = [p for (p, i) in st.plot_ids if i == 2]
+    @test length(dots) == 2
+    shown_at() = only(p[1][] for p in dots if p.visible[])
+    @test only(shown_at()) ≈ Point3f(0.23, 0.71, 0.4)
+    only(b for b in fig.content if b isa Menu && "voxels" in b.options[]).i_selected[] = 2
+    @test only(shown_at()) ≈ Point3f(0.2, 0.7, 0.4)
+    @test haskey(st.voxels, 1) && !haskey(st.voxels, 2)            # charges have no voxels
+
+    # hidden with its checkbox like any object
+    [b for b in fig.content if b isa Checkbox][2].checked[] = false
+    @test !any(p.visible[] for p in dots)
 end

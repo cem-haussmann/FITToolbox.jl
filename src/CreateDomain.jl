@@ -160,6 +160,16 @@ struct FITDomain{T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
     end
 end
 
+# Slack for comparing positions with the nodes of one axis. The nodes are a running sum
+# of the cell widths, so the last one can miss the requested extent by rounding: ten cells
+# of 0.1 m end at 0.9999999999999999 m. Without the slack an object reaching exactly to
+# the boundary would count as beyond it.
+_slack(nodes) = 1e-9 * (nodes[end] - nodes[1])
+
+# true if x lies within lo … hi of this axis, up to the slack
+_within(x, nodes, lo = nodes[1], hi = nodes[end]) =
+    lo - _slack(nodes) <= x <= hi + _slack(nodes)
+
 function create_domain(domain_size, resolution; units="m", σ=0.0, ε_r=1.0, μ_r=1.0)
     σ = Float64(σ)
     ε_r = Float64(ε_r)

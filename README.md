@@ -64,10 +64,10 @@ using FITToolbox, LinearAlgebra
 domain = create_domain([100.0, 100.0, 100.0], [2.0, 2.0, 2.0];
                        units = "m", σ = 0, ε_r = 1, μ_r = 1)
 
-# A proton at the centre. Charge in FIT is already volume-integrated, so the
-# value is written directly into the dual volume that contains it.
-q = zeros(domain.Np)
-q[get_index_entity(domain, DualVolume(), 50.0, 50.0, 50.0)] = 1.602e-19
+# A proton at the centre. Charge in FIT is already volume-integrated: the charge
+# goes into the dual volume of the nearest node.
+create_electric_charge!(domain, 50.0, 50.0, 50.0; charge = 1.602e-19, name = "proton")
+q = get_source(domain, "proton")
 
 # Discrete Poisson operator. Without further conditions every face is homogeneous
 # Neumann, the natural boundary condition.

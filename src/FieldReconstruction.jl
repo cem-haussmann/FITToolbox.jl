@@ -11,6 +11,7 @@ import ..Direction
 import ..DirX
 import ..DirY
 import ..DirZ
+import .._within
 
 abstract type TopologicalEntity  end
 abstract type EdgeEntity   <: TopologicalEntity end

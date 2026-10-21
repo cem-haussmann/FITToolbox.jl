@@ -13,7 +13,7 @@ function _find_dual_index(centers::AbstractVector, val::Real)
 end
 
 function _find_primal_index(nodes::AbstractVector, val::Real)
-    if val < first(nodes) || val > last(nodes)
+    if !_within(val, nodes)
         @warn "The defined position ($val) is outside of the domain!"
         return nothing
     end

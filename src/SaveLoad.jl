@@ -95,6 +95,9 @@ function _step_to_dict(s::CreateObject)
         d["radius"] = o.radius
         d["height"] = o.height
         d["axis"]   = string(nameof(typeof(o.axis)))
+    elseif o isa PointCharge
+        d["position"] = collect(o.position)
+        d["charge"]   = o.charge
     elseif o isa CircularLoop
         d["center"]  = collect(o.center)
         d["radius"]  = o.radius
@@ -126,6 +129,8 @@ function _step_from_dict(d)
         Sphere(Tuple(d["center"]), d["radius"], material())
     elseif t == "Cylinder"
         Cylinder(Tuple(d["base"]), d["radius"], d["height"], _DIRECTIONS[d["axis"]], material())
+    elseif t == "PointCharge"
+        PointCharge(Tuple(d["position"]), d["charge"])
     elseif t == "CircularLoop"
         normal = _DIRECTIONS[d["normal"]]
         current = haskey(d, "current_im") ? complex(d["current"], d["current_im"]) : d["current"]

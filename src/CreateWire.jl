@@ -80,11 +80,13 @@ function _circular_loop_unit_source(config, loop::CircularLoop, ::DirY)
     
     # The loop lies in the u–w plane, so only u and w constrain the radius; v only
     # has to fall inside the domain.
-    config.nodes_v[1] <= cv <= config.nodes_v[end-2] ||
+    _within(cv, config.nodes_v, config.nodes_v[1], config.nodes_v[end-2]) ||
         throw(ArgumentError("coil plane lies outside the domain in v-direction"))
-    cu - R >= Nodes_U[1] && cu + R <= Nodes_U[end-2] ||
+    _within(cu - R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) &&
+    _within(cu + R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) ||
         throw(ArgumentError("coil does not fit in the domain in u-direction"))
-    cw - R >= Nodes_W[1] && cw + R <= Nodes_W[end-2] ||
+    _within(cw - R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) &&
+    _within(cw + R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) ||
         throw(ArgumentError("coil does not fit in the domain in w-direction"))
  
 
@@ -132,11 +134,13 @@ function _circular_loop_unit_source(config, loop::CircularLoop, ::DirX)
     
     # The loop lies in the v–w plane, so only v and w constrain the radius; u only
     # has to fall inside the domain.
-    config.nodes_u[1] <= cu <= config.nodes_u[end-2] ||
+    _within(cu, config.nodes_u, config.nodes_u[1], config.nodes_u[end-2]) ||
         throw(ArgumentError("coil plane lies outside the domain in u-direction"))
-    cv - R >= Nodes_V[1] && cv + R <= Nodes_V[end-2] ||
+    _within(cv - R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) &&
+    _within(cv + R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) ||
         throw(ArgumentError("coil does not fit in the domain in v-direction"))
-    cw - R >= Nodes_W[1] && cw + R <= Nodes_W[end-2] ||
+    _within(cw - R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) &&
+    _within(cw + R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) ||
         throw(ArgumentError("coil does not fit in the domain in w-direction"))
  
 
@@ -183,11 +187,13 @@ function _circular_loop_unit_source(config, loop::CircularLoop, ::DirZ)
 
     # The loop lies in the u–v plane, so only u and v constrain the radius; w only
     # has to fall inside the domain.
-    config.nodes_w[1] <= cw <= config.nodes_w[end-2] ||
+    _within(cw, config.nodes_w, config.nodes_w[1], config.nodes_w[end-2]) ||
         throw(ArgumentError("coil plane lies outside the domain in w-direction"))
-    cu - R >= Nodes_U[1] && cu + R <= Nodes_U[end-2] ||
+    _within(cu - R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) &&
+    _within(cu + R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) ||
         throw(ArgumentError("coil does not fit in the domain in u-direction"))
-    cv - R >= Nodes_V[1] && cv + R <= Nodes_V[end-2] ||
+    _within(cv - R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) &&
+    _within(cv + R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) ||
         throw(ArgumentError("coil does not fit in the domain in v-direction"))
 
 

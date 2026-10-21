@@ -73,6 +73,12 @@ end
     @test left  ≈ 2*0.5 + 3y - z atol=1e-12
     @test right ≈ 2*5.5 + 3y - z atol=1e-12
 
+    # exactly on the far boundary, despite the rounding of the last node: a value, no warning
+    B = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test B.nodes_u[end] < 1.0
+    fB = [2*B.nodes_u[i] + 3*B.nodes_v[j] - B.nodes_w[k] for i in 1:B.Nu, j in 1:B.Nv, k in 1:B.Nw] |> vec
+    @test (@test_logs interpolate(B, PrimalNode(), fB, 1.0, 0.5, 0.5)) ≈ 2 + 1.5 - 0.5 atol=1e-12
+
     # outside the domain: NaN with a warning, for dual quantities as for primal ones
     for (entity, p) in ((DualNode(), (-1.0, y, z)), (DualNode(), (x, 8.5, z)),
                         (DualNode(), (x, y, 10.5)), (PrimalNode(), (7.0, y, z)))

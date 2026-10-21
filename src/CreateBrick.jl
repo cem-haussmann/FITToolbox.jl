@@ -36,9 +36,9 @@ function _apply!(domain::FITDomain, brick::Brick)
     # Check the requested extent against the grid before snapping. After
     # CheckClosest the indices are clamped into range, so testing them cannot
     # detect a brick that lies outside.
-    (u_min >= Nodes_U[1] && u_max <= Nodes_U[end] &&
-     v_min >= Nodes_V[1] && v_max <= Nodes_V[end] &&
-     w_min >= Nodes_W[1] && w_max <= Nodes_W[end]) ||
+    (_within(u_min, Nodes_U) && _within(u_max, Nodes_U) &&
+     _within(v_min, Nodes_V) && _within(v_max, Nodes_V) &&
+     _within(w_min, Nodes_W) && _within(w_max, Nodes_W)) ||
         throw(ArgumentError("brick extends beyond the domain: requested u $(u_min)–$(u_max), \
                              v $(v_min)–$(v_max), w $(w_min)–$(w_max) m"))
     

@@ -36,14 +36,26 @@ function _toggle_groups(entries, colors)
     end
 end
 
-# The colour given to the object, or the next one from Makie's palette
+# Point charges by sign, as is usual for field plots
+const _CHARGE_COLORS = (positive = "#E41A1C", negative = "#1F78B4")
+
+# For objects without a colour of their own: Makie's Wong palette without its blues and
+# its vermilion, so that red and blue mean charges only, plus brown, grey and olive
+const _OBJECT_PALETTE = ["#E69F00", "#009E73", "#CC79A7", "#F0E442", "#8C564B", "#999999", "#BCBD22"]
+
+# The colour given to the object, red or blue for a charge by its sign, or the next one
+# from the object palette
 function _object_colors(entries)
-    palette = Makie.wong_colors()
+    palette = _OBJECT_PALETTE
     colors = Dict{Int,Any}()
     for (k, e) in enumerate(entries)
-        m = e.object isa FITToolbox.AbstractSolid ? e.object.material : nothing
-        colors[e.obj_id] = m !== nothing && m.color !== nothing ?
-                           FITToolbox._color_hex(m.color) : palette[mod1(k, length(palette))]
+        o = e.object
+        m = o isa FITToolbox.AbstractSolid ? o.material : nothing
+        colors[e.obj_id] =
+            o isa FITToolbox.PointCharge ? (o.charge >= 0 ? _CHARGE_COLORS.positive :
+                                                             _CHARGE_COLORS.negative) :
+            m !== nothing && m.color !== nothing ? FITToolbox._color_hex(m.color) :
+            palette[mod1(k, length(palette))]
     end
     return colors
 end
@@ -237,6 +249,17 @@ _draw_object!(scene, s::FITToolbox.Sphere, color; kw...) =
 _draw_object!(scene, c::FITToolbox.CircularLoop, color; kw...) =
     lines!(scene, _loop_points(c); color, kw...)
 
+# a dot of fixed screen size, at the given position or, with `at`, elsewhere (the node)
+_draw_object!(scene, q::FITToolbox.PointCharge, color; at = q.position, kw...) =
+    scatter!(scene, [Point3f(at)]; color, markersize = 16, strokewidth = 1,
+             strokecolor = :black, kw...)
+
+# The node whose dual volume receives the charge, as a point
+function _charge_node_point(domain, q::FITToolbox.PointCharge)
+    i, j, k = FITToolbox._charge_node(domain, q)
+    return (domain.nodes_u[i], domain.nodes_v[j], domain.nodes_w[k])
+end
+
 # Walk up from a picked primitive to the plot drawn for an object
 function _picked_id(plot_ids, plt)
     while plt !== nothing
@@ -297,6 +320,14 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1100, 700))
                             markerscale = h, tiplength = 0.45, tipradius = 0.25,
                             shaftradius = 0.08, minshaftlength = 0.1, clip_planes = planes,
                             visible = lift(&, shown[id], edges_shown, arrows_on))
+            plot_ids[plt] = id
+        elseif e.object isa FITToolbox.PointCharge
+            # as given in the objects view; on the node that receives it in the voxel view
+            plt = _draw_object!(ls, e.object, c; clip_planes = planes,
+                                visible = lift((s, v) -> s && !v, shown[id], voxel_mode))
+            plot_ids[plt] = id
+            plt = _draw_object!(ls, e.object, c; at = _charge_node_point(domain, e.object),
+                                clip_planes = planes, visible = lift(&, shown[id], voxel_mode))
             plot_ids[plt] = id
         else
             plt = _draw_object!(ls, e.object, c; clip_planes = planes,
