@@ -119,11 +119,17 @@ interactive 3D view of a model, as modelled and as the grid sees it.
     position; a menu picks the field, and for vectors the magnitude or a component.
     Complex fields show the instantaneous value Re(F e^{jφ}) with a phase slider, or
     their real or imaginary part, magnitude or phase. The colours span the whole field
-    (symmetric about zero for signed values) or only the plane, with an optional log
-    scale for magnitudes; jet by default, viridis as an option, and a slider narrows the
-    range. `refine` samples the plane between the grid nodes.
+    or only the plane: symmetric about zero for values of both signs, from zero for
+    magnitudes, from the smallest to the largest value otherwise. Values without
+    negative ones can be shown on a log scale; jet by default, viridis as an option, and
+    a slider narrows the range. `refine` samples the plane between the grid nodes.
   - Time series, e.g. from FDTD: `"E (V/m)" => (snapshots, PrimalEdge(), times)`, with a
     time slider and "play"; switching fields keeps the time at the nearest snapshot.
+  - Arrows for vector fields: the part in the plane, on a coarser lattice, all the same
+    length or scaled to the magnitude; they follow the phase and the time.
+  - Options that do not apply are greyed out and ignore clicks, keeping their state:
+    the grid without a cut, arrows for scalars, their length without arrows, the log
+    scale for values of both signs.
 - **Save and load:** `save_domain(path, domain)` writes the grid, the background
   material and the full history to a human-readable TOML file; `load_domain(path)`
   rebuilds the domain from it, with `undo!` still working. Files are checked on loading:
@@ -172,6 +178,12 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 - New notebook `examples/snippets/Domain_and_History.ipynb`.
 - New script `examples/snippets/View_Domain.jl`: a model with every object type in
   `view_domain`. The examples environment includes GLMakie for it.
+- New script `examples/snippets/View_Field.jl`: a dielectric sphere between two plates,
+  its potential, E and D in the field view of `view_domain`.
+- New script `examples/snippets/View_Magnetostatics.jl`: an iron C-core electromagnet
+  with an air gap and a helical coil, B, H and A in the field view.
+- README: figures of the field view, rendered from these two examples by
+  `examples/snippets/make_readme_figures.jl` into `docs/images`.
 - New notebook `examples/static/E-Statics-Dielectric-Sphere.ipynb`: a dielectric sphere
   in a uniform field on four grids via `change_resolution`, against the analytical
   solution.

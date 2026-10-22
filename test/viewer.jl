@@ -244,6 +244,15 @@ end
     @test _VIEW._picked_id(st.plot_ids, nothing) === nothing
     @test _VIEW._picked_id(st.plot_ids, first(p for p in st.ls.scene.plots if p isa Makie.Wireframe)) === nothing
 
+    # and the picked object is hidden and named; nothing picked, nothing hidden
+    entries = list_objects(d).entries
+    _VIEW._hide_object!(st.shown, entries, st.info, nothing)
+    @test all(id -> st.shown[id][], 1:4)
+    _VIEW._hide_object!(st.shown, entries, st.info, 2)
+    @test !st.shown[2][] && st.info[] == "hidden: ball (obj_id 2)"
+    button("Show all").clicks[] += 1
+    @test st.shown[2][] && st.info[] == "Click an object to hide it"
+
     # a click outside the scene hides nothing
     ev = events(fig).mousebutton
     ev[] = Makie.MouseButtonEvent(Mouse.left, Mouse.press)
@@ -408,26 +417,52 @@ end
     @test all(isnan, _VIEW._display_values(vec3, vector, "magnitude", "phase", 0))  # a vector has no phase
     @test _VIEW._display_values(vec3, vector, "y", "real part", 0) ≈ fill(0.0, 1, 1)
 
-    # the global range: symmetric for signed values, from zero for magnitudes, the
-    # amplitude for the instantaneous value so that it holds at every phase
+    # what a point can show: its value, or over a period for the instantaneous value
     E0 = (1.0, -2.0, 0.5) .* (1 + 2im)
     E = only(_VIEW._field_specs(d, ("E" => (_uniform_edges(d, E0), PrimalEdge()),)))
-    @test all(_VIEW._global_range(d, E, "y", "instantaneous", false) .≈ (-abs(E0[2]), abs(E0[2])))
-    @test all(_VIEW._global_range(d, E, "y", "real part", false) .≈ (-2.0, 2.0))
-    @test all(_VIEW._global_range(d, E, "magnitude", "instantaneous", false) .≈ (0.0, sqrt(sum(abs2, E0))))
-    @test _VIEW._global_range(d, E, "x", "phase", false) == (-180.0, 180.0)
-    @test _VIEW._signed(E, "magnitude", "phase")                       # so never on a log scale
-    @test _VIEW._global_range(d, E, "magnitude", "instantaneous", false; max_points = 10) ==
-          _VIEW._global_range(d, E, "magnitude", "instantaneous", false)      # a subset of the nodes
+    v = (3.0 + 4im, 0.0 + 0im, 0.0 + 1im)
+    @test _VIEW._point_extent(v, E, "x", "instantaneous") == (-5.0, 5.0)
+    @test _VIEW._point_extent(v, E, "magnitude", "instantaneous") == (0.0, sqrt(26))
+    @test _VIEW._point_extent(v, E, "magnitude", "real part") == (3.0, 3.0)
+    @test all(_VIEW._point_extent(v, E, "magnitude", "imaginary part") .≈ sqrt(17))
+    @test _VIEW._point_extent(v, E, "z", "imaginary part") == (1.0, 1.0)
+    @test _VIEW._point_extent(2.5, (vector = false, complex = false), "value", "instantaneous") == (2.5, 2.5)
 
-    @test _VIEW._slice_range([-3.0, 1.0, NaN], true, false) == (-3.0, 3.0)
-    @test _VIEW._slice_range([0.0, 0.5, 2.0], false, false) == (0.0, 2.0)
-    @test _VIEW._slice_range([0.0, 0.01, 2.0], false, true) == (0.01, 2.0)  # log: the smallest positive
-    @test _VIEW._slice_range([0.5, 2.0], false, true) == (0.2, 2.0)        # but at least one decade
-    @test _VIEW._slice_range([2.0, 2.0], false, true) == (0.2, 2.0)        # also for a uniform field
-    @test _VIEW._slice_range([0.0, 1e-9, 2.0], false, true) == (2e-6, 2.0)  # at most six decades
-    @test _VIEW._slice_range([NaN], true, false) == (-1.0, 1.0)              # nothing to show
-    @test _VIEW._slice_range(Float64[], false, true) == (0.1, 1.0)
+    # the stats over the field: smallest, largest, smallest positive
+    @test all(_VIEW._global_stats(d, E, "y", "instantaneous")[1:2] .≈ (-abs(E0[2]), abs(E0[2])))
+    @test all(_VIEW._global_stats(d, E, "y", "real part") .≈ (-2.0, -2.0, Inf))   # one value, negative
+    @test _VIEW._global_stats(d, E, "x", "phase")[1:2] == (-180.0, 180.0)
+    @test _VIEW._global_stats(d, E, "magnitude", "instantaneous"; max_points = 10) ==
+          _VIEW._global_stats(d, E, "magnitude", "instantaneous")       # a subset of the nodes
+    @test isequal(_VIEW._slice_stats([-3.0, 1.0, NaN]), (-3.0, 1.0, 1.0))
+    @test isequal(_VIEW._slice_stats([NaN]), (NaN, NaN, NaN))
+    @test _VIEW._is_magnitude(E, "magnitude", "real part") && _VIEW._is_magnitude(E, "x", "magnitude")
+    @test !_VIEW._is_magnitude(E, "magnitude", "phase") && !_VIEW._is_magnitude(E, "x", "real part")
+    @test _VIEW._log_possible((0.0, 2.0, 0.5)) && !_VIEW._log_possible((-1.0, 2.0, 0.5))
+    @test !_VIEW._log_possible((-180.0, 180.0, NaN))                      # a phase never
+
+    # the range: about zero for both signs, from zero for magnitudes, min…max otherwise
+    @test _VIEW._range_from((-3.0, 1.0, 1.0), false, false) == (-3.0, 3.0)
+    @test _VIEW._range_from((0.0, 1.0, 0.2), false, false) == (0.0, 1.0)   # a potential 0 … 1 V
+    @test _VIEW._range_from((5.0, 6.0, 5.0), false, false) == (5.0, 6.0)
+    @test _VIEW._range_from((-1.6, -0.5, Inf), false, false) == (-1.6, -0.5) # E_z all negative
+    @test _VIEW._range_from((0.5, 2.0, 0.5), true, false) == (0.0, 2.0)    # a magnitude from zero
+    @test all(_VIEW._range_from((-2.0, -2.0, Inf), false, false) .≈ (-2.1, -1.9))   # one value
+    @test _VIEW._range_from((0.0, 0.0, NaN), true, false) == (0.0, 1.0)    # nothing at all
+    @test _VIEW._range_from((NaN, NaN, NaN), false, false) == (-1.0, 1.0)  # nothing to show
+    # log: from the smallest positive value, one to six decades below the largest
+    @test _VIEW._range_from((0.0, 2.0, 0.01), false, true) == (0.01, 2.0)
+    @test _VIEW._range_from((0.5, 2.0, 0.5), true, true) == (0.2, 2.0)
+    @test _VIEW._range_from((2.0, 2.0, 2.0), true, true) == (0.2, 2.0)
+    @test _VIEW._range_from((0.0, 2.0, 1e-9), true, true) == (2e-6, 2.0)
+    @test _VIEW._range_from((-1.0, 2.0, 1.0), false, true) == (-2.0, 2.0)  # both signs: no log
+    @test _VIEW._range_from((NaN, NaN, NaN), true, true) == (0.1, 1.0)
+    # the range slider keeps the end nearest to zero
+    @test all(_VIEW._narrowed((-2.0, 2.0), 0.1, false) .≈ (-0.2, 0.2))
+    @test all(_VIEW._narrowed((0.0, 2.0), 0.1, false) .≈ (0.0, 0.2))
+    @test all(_VIEW._narrowed((5.0, 6.0), 0.1, false) .≈ (5.0, 5.1))
+    @test all(_VIEW._narrowed((-1.6, -0.6), 0.1, false) .≈ (-0.7, -0.6))
+    @test all(_VIEW._narrowed((0.01, 2.0), 0.1, true) .≈ (0.001, 0.2))    # log: shifted down
 end
 
 @testset "view_domain fields: the panel" begin
@@ -501,7 +536,7 @@ end
     xs, ys = _VIEW._plane_coords(d, 3, 1)
     @test _VIEW._sample_plane(d, Φ, 3, 0.3, xs, ys, 3) ≈ 3 .* _VIEW._sample_plane(d, Φ, 3, 0.3, xs, ys, 1)
     M = maximum(abs, snaps[4])
-    @test all(_VIEW._global_range(d, Φ, "value", "instantaneous", false) .≈ (-M, M))
+    @test all(_VIEW._global_stats(d, Φ, "value", "instantaneous")[1:2] .≈ (minimum(snaps[1]), M))
 
     @test _VIEW._nearest_step([0.0, 1e-9, 2e-9], 1.4e-9) == 2
     @test _VIEW._time_label(2.5e-12) == "2.5 ps" && _VIEW._time_label(0.0) == "0 s"
@@ -521,7 +556,7 @@ end
     @test f.values[] ≈ 3 .* v1
     @test f.time_text[] == "t = 2.0 ns  (3/4)"
     @test endswith(only(b for b in fig.content if b isa Colorbar).label[], ", t = 2.0 ns  (3/4)")
-    @test all(f.colorrange[] .≈ (-M, M))                                  # global: fixed over time
+    @test all(f.colorrange[] .≈ (minimum(snaps[1]), M))                  # global: fixed over time
     f.field_menu.i_selected[] = 2
     @test f.time_slider.value[] == 2                                      # 1.5 ns is nearest to 2 ns
     f.field_menu.i_selected[] = 3
@@ -529,7 +564,16 @@ end
 
     # the range slider narrows the colour range, here by 10
     f.range_slider.value[] = -1
-    @test all(f.colorrange[] .≈ (-maximum(abs, g) / 10, maximum(abs, g) / 10))
+    lo, hi = extrema(g)                                                   # all positive
+    @test all(f.colorrange[] .≈ (lo, lo + (hi - lo) / 10))
+
+    # one step of play: on to the next snapshot, after the last back to the first; a
+    # static field stays
+    f.field_menu.i_selected[] = 1
+    set_close_to!(f.time_slider, 3)
+    @test _VIEW._next_step!(f.time_slider, f.field[]) == 4
+    @test _VIEW._next_step!(f.time_slider, f.field[]) == 1
+    @test _VIEW._next_step!(f.time_slider, (snapshots = [g],)) == 1
 
     # play toggles; without a window (CairoMakie) the time does not move and it stops
     f.field_menu.i_selected[] = 1
@@ -678,4 +722,117 @@ end
     full = length(Makie.GeometryBasics.faces(st.shapes[1][]))
     [b for b in fig.content if b isa Checkbox][end-3].checked[] = true    # cut along z at 0.2 m
     @test 0 < length(Makie.GeometryBasics.faces(st.shapes[1][])) < full
+end
+
+@testset "view_domain fields: arrows" begin
+    d = _field_domain()                                                   # 11 × 9 × 7 nodes
+    # the lattice: about 22 along the longer side, centred in the first step
+    @test _VIEW._arrow_lattice(51, 51) == ((2:3:51, 2:3:51), 3)
+    @test _VIEW._arrow_lattice(11, 9) == ((1:1:11, 1:1:9), 1)
+    @test _VIEW._arrow_mode("magnitude") == "instantaneous" && _VIEW._arrow_mode("imaginary part") == "imaginary part"
+    @test _VIEW._arrow_spacing([0.0, 0.1, 0.3], [0.0, 0.2], 1:3, 1:2) ≈ 0.1
+    @test _VIEW._arrow_spacing([0.0, 0.1], [0.0, 0.2], 1:1, 1:1) ≈ 0.2   # one arrow: the plane's size
+
+    # a uniform complex field: in-plane arrows, the normal component dropped
+    E0 = (1.0, -2.0, 0.5) .* (1 + 2im)
+    E = only(_VIEW._field_specs(d, ("E" => (_uniform_edges(d, E0), PrimalEdge()),)))
+    xs, ys = _VIEW._plane_coords(d, 2, 1)                                 # normal to y: x and z
+    smp = _VIEW._sample_plane(d, E, 2, 0.4, xs, ys)
+    I, J = 1:2:11, 1:3:7
+    pts, dirs = _VIEW._arrows(smp, E, 2, 0.4, xs, ys, I, J, "real part", 0; len = 0.05)
+    @test length(pts) == length(I) * length(J)
+    @test all(p -> p[2] ≈ 0.4f0, pts) && all(v -> v[2] == 0, dirs)        # in the plane
+    @test all(v -> v ≈ Vec3f(1, 0, 0.5) ./ hypot(1, 0.5) .* 0.05f0, dirs)  # Re E: x and z, equal length
+    _, dirs90 = _VIEW._arrows(smp, E, 2, 0.4, xs, ys, I, J, "instantaneous", 90; len = 0.05)
+    @test all(v -> v ≈ Vec3f(-2, 0, -1) ./ hypot(2, 1) .* 0.05f0, dirs90) # Re(E j) = -Im E
+    # scaled: by the in-plane magnitude against the reference, at most `len`
+    _, short = _VIEW._arrows(smp, E, 2, 0.4, xs, ys, I, J, "real part", 0; len = 0.05,
+                             scaled = true, ref = 4 * hypot(1, 0.5))
+    @test all(v -> norm(v) ≈ 0.05f0 / 4, short)
+    _, capped = _VIEW._arrows(smp, E, 2, 0.4, xs, ys, I, J, "real part", 0; len = 0.05,
+                              scaled = true, ref = 1e-3)
+    @test all(v -> norm(v) ≈ 0.05f0, capped)
+    # no field, no arrow: NaN, so that the number stays
+    zero_E = only(_VIEW._field_specs(d, ("0" => (zeros(3d.Np), PrimalEdge()),)))
+    zp, _ = _VIEW._arrows(_VIEW._sample_plane(d, zero_E, 2, 0.4, xs, ys), zero_E, 2, 0.4, xs, ys,
+                          I, J, "real part", 0; len = 0.05)
+    @test length(zp) == length(I) * length(J) && all(p -> isnan(p[1]), zp)
+
+    # the panel: arrows for vector fields only, following the phase
+    Φ = _node_field(d, (x, y, z) -> 10x - 5)
+    fig, st = _VIEW._view_figure(d, "E" => (_uniform_edges(d, E0), PrimalEdge()),
+                                 "Φ (V)" => (Φ, PrimalNode()))
+    f = st.field
+    @test !f.arrow_plot.visible[]
+    f.on.checked[] = true
+    f.arrows[] = true
+    @test f.arrow_plot.visible[]
+    pts, dirs = f.arrow_data[]
+    @test length(pts) == 11 * 9 && all(v -> v[3] == 0, dirs)              # the z plane, every node
+    f.phase_slider.value[] = 90
+    @test normalize(last(f.arrow_data[])[1]) ≈ normalize(Vec3f(-2, 4, 0))   # Re(E j) = -Im E
+    f.scaled[] = true
+    @test maximum(norm, last(f.arrow_data[])) < 0.8 * _VIEW._arrow_spacing(_VIEW._plane_coords(d, 3, 1)..., 1:11, 1:9)
+    f.field_menu.i_selected[] = 2                                         # a scalar: no arrows
+    @test !f.arrow_plot.visible[]
+end
+
+@testset "view_domain fields: a potential from 0 V" begin
+    # as between two plates at 0 V and 1 V: one sign, so the range is 0 … 1 V, not ±1 V,
+    # and a log scale is possible
+    d = _field_domain()
+    Φ = _node_field(d, (x, y, z) -> z / 0.6)
+    fig, st = _VIEW._view_figure(d, "Φ (V)" => (Φ, PrimalNode()),
+                                 "E" => (_node_field(d, (x, y, z) -> x - 0.5), PrimalNode()))
+    f = st.field
+    f.on.checked[] = true                                                 # the plane z = 0.3 m
+    @test all(f.colorrange[] .≈ (0.0, 1.0)) && !f.signed[]
+    @test f.log_label[] == "log scale"
+    f.fit[] = true                                                        # the plane: Φ = 0.5 V only
+    @test all(f.colorrange[] .≈ (0.475, 0.525))
+    f.fit[] = false
+    f.log[] = true
+    @test f.plot.colorscale[] == log10 && all(f.colorrange[] .≈ (0.1, 1.0))   # at least a decade
+    axis_menu = only(filter(b -> b isa Menu && b.options[] == ["x", "y", "z"], fig.content))
+    axis_menu.i_selected[] = 1                                            # x = 0.5 m: 0 … 1 V on it
+    @test count(isnan, f.values[]) == 9                                   # Φ = 0 at z = 0 (9 along y): not on a log scale
+    # values with both signs: symmetric, and the log scale is not available
+    f.field_menu.i_selected[] = 2
+    @test f.signed[] && all(f.colorrange[] .≈ (-0.5, 0.5))
+    @test f.log_label[] == "log scale (n/a)" && f.plot.colorscale[] == identity
+end
+
+@testset "view_domain: options that do not apply are disabled" begin
+    # a click on a disabled checkbox changes nothing; it is greyed out with its label
+    enabled(box) = box.onchange[](false) == true
+    grey(box) = box.checkboxstrokecolor_unchecked[] == Makie.to_color(_VIEW._DISABLED_GRAY)
+
+    d = _field_domain()
+    E0 = (1.0, -2.0, 0.5)
+    fig, st = _VIEW._view_figure(d, "E" => (_uniform_edges(d, E0), PrimalEdge()),
+                                 "Φ (V)" => (_node_field(d, (x, y, z) -> x - 0.5), PrimalNode()))
+    f = st.field
+
+    # the grid in the cut plane: only with the cut
+    @test !enabled(st.grid_box) && grey(st.grid_box)
+    st.cut[] = true
+    @test enabled(st.grid_box) && !grey(st.grid_box)
+    st.grid_box.checked[] = true
+    st.cut[] = false
+    @test !enabled(st.grid_box) && st.grid_box.checked[]                 # disabled, state kept
+
+    # arrows: only for vector fields; their length only with arrows
+    @test enabled(f.arrows_box) && !enabled(f.scaled_box)
+    f.arrows[] = true
+    @test enabled(f.scaled_box)
+    f.field_menu.i_selected[] = 2                                         # Φ: a scalar
+    @test !enabled(f.arrows_box) && !enabled(f.scaled_box) && grey(f.arrows_box)
+    f.field_menu.i_selected[] = 1
+    @test enabled(f.arrows_box) && enabled(f.scaled_box)
+
+    # the log scale: only for values without negative ones
+    f.on.checked[] = true
+    @test enabled(f.log_box)                                              # |E|
+    f.field_menu.i_selected[] = 2                                         # Φ from -0.5 to 0.5 V
+    @test !enabled(f.log_box) && f.log_label[] == "log scale (n/a)"
 end

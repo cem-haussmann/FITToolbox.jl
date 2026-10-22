@@ -123,10 +123,17 @@ position of the cut, but has its own checkbox, so it can be shown without cuttin
 objects. For a vector the plane shows its magnitude or one component; for complex data
 the instantaneous value Re(F e^{jφ}) with a phase slider, or its real part, imaginary
 part, magnitude or phase. The colours span the whole field by default, so that planes
-can be compared, or only the plane ("fit colours to plane"); a slider narrows the
-range down to a thousandth, to bring out weak parts of the field. The colour map is
-`jet`, or `viridis`, and magnitudes can be shown on a log scale. The name labels the
-colour bar, so it can carry the unit, e.g. `"B (T)"`.
+can be compared, or only the plane ("fit colours to plane"): symmetric about zero for
+values of both signs (and for the instantaneous value of complex data), from zero for
+magnitudes, and from the smallest to the largest value otherwise, e.g. 0 … 1 V for a
+potential between plates at 0 V and 1 V. A slider narrows the range down to a
+thousandth, keeping its end nearest to zero, to bring out weak parts of the field. The
+colour map is `jet`, or `viridis`; values without negative ones, such as magnitudes or
+that potential, can be shown on a log scale. The name labels the
+colour bar, so it can carry the unit, e.g. `"B (T)"`. Vector fields can also be shown as
+arrows: their part in the plane, on a coarser lattice (about 22 along the longer side),
+all the same length or scaled to the magnitude, for complex fields at the phase of the
+slider.
 
 A field that changes over time, e.g. from FDTD, is given as
 `"name" => (snapshots, entity, times)`: `snapshots` is a vector of data vectors, or a

@@ -240,6 +240,22 @@ _checkbox(pos, checked; color = Makie.COLOR_ACCENT[]) =
     Checkbox(pos; checked, size = 18, checkboxstrokewidth = 2, checkboxcolor_checked = color,
              checkboxstrokecolor_checked = color, checkboxstrokecolor_unchecked = color)
 
+# A checkbox that works only while `enabled`: greyed out and deaf to clicks otherwise,
+# keeping its state for when it is enabled again; its `label` is greyed out with it
+const _DISABLED_GRAY = RGBf(0.75, 0.75, 0.75)
+function _enable!(box, label, enabled; color = Makie.COLOR_ACCENT[])
+    text_color = label.color[]                       # the label's own, to go back to
+    on(enabled; update = true) do e
+        box.onchange[] = e ? (!) : identity
+        c = Makie.to_color(e ? color : _DISABLED_GRAY)
+        box.checkboxstrokecolor_unchecked[] = c
+        box.checkboxstrokecolor_checked[] = c
+        box.checkboxcolor_checked[] = c
+        label.color[] = e ? text_color : Makie.to_color(_DISABLED_GRAY)
+    end
+    return box
+end
+
 _button(pos, label) = Button(pos; label, cornerradius = 10, buttoncolor = RGBf(0.90, 0.92, 0.96))
 
 # Back to the camera at the start: Makie's default viewing direction, centred on the scene
@@ -347,6 +363,15 @@ _draw_object!(scene, q::FITToolbox.PointCharge, color; at = q.position, kw...) =
 function _charge_node_point(domain, q::FITToolbox.PointCharge)
     i, j, k = FITToolbox._charge_node(domain, q)
     return (domain.nodes_u[i], domain.nodes_v[j], domain.nodes_w[k])
+end
+
+# Hide the object that was clicked, if any, and name it
+function _hide_object!(shown, entries, info, id)
+    id === nothing && return nothing
+    shown[id][] = false
+    e = only(x for x in entries if x.obj_id == id)
+    info[] = "hidden: $(e.name) (obj_id $id)"
+    return nothing
 end
 
 # Walk up from a picked primitive to the plot drawn for an object
@@ -487,12 +512,14 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
 
     # --- second column: cut ---
     panel, row = GridLayout(fig[1, 3]; tellheight = false, valign = :top), 0
-    Label(panel[row += 1, 1:3], "Cut"; font = :bold, halign = :left)
+    Label(panel[row += 1, 1], "Cut"; font = :bold, halign = :left)
+    header = row
     cut_on = _checkbox(panel[row += 1, 1], false)
     axis_menu = Menu(panel[row, 2:3]; options = ["x", "y", "z"], default = "z")
     pos0 = _cut_positions(domain, 3)
     slider = Slider(panel[row += 1, 1:3]; range = pos0, startvalue = pos0[cld(length(pos0), 2)])
-    Label(panel[row += 1, 1:3], lift(v -> "position: $(round(v; sigdigits = 4)) m", slider.value);
+    # the position next to the heading, to save a row
+    Label(panel[header, 2:3], lift(v -> "position: $(round(v; sigdigits = 4)) m", slider.value);
           halign = :left)
 
     axis = lift(s -> findfirst(==(s), ["x", "y", "z"]), axis_menu.selection)
@@ -535,7 +562,7 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
 
     # the grid in the cut plane, shown while the cut is active
     grid_on = _checkbox(panel[row += 1, 1], false)
-    Label(panel[row, 2:3], "grid in cut plane"; halign = :left)
+    _enable!(grid_on, Label(panel[row, 2:3], "grid in cut plane"; halign = :left), cut_on.checked)
     linesegments!(ls, lift((a, pos) -> _cut_grid_segments(domain, a, pos), axis, slider.value);
                   color = (:gray20, 0.6), linewidth = 0.75,
                   visible = lift(&, cut_on.checked, grid_on.checked))
@@ -570,12 +597,7 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
         elseif event.action == Mouse.release && is_mouseinside(ls.scene) &&
                hypot((mouse .- press_pos[])...) < 3
             plt, _ = pick(ls.scene)
-            id = _picked_id(plot_ids, plt)
-            if id !== nothing
-                shown[id][] = false
-                e = only(x for x in entries if x.obj_id == id)
-                info[] = "hidden: $(e.name) (obj_id $id)"
-            end
+            _hide_object!(shown, entries, info, _picked_id(plot_ids, plt))
         end
         return Consume(false)
     end
@@ -583,5 +605,5 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
     colsize!(fig.layout, 2, Fixed(270))
     colsize!(fig.layout, 3, Fixed(250))
     return fig, (; ls, shown, voxels, voxel_mode, shapes, combined_mode, planes, plot_ids, info,
-                 field)
+                 cut = cut_on.checked, grid_box = grid_on, field)
 end

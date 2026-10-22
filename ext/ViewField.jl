@@ -61,9 +61,11 @@ end
 # The quantities a field offers: its value, or the magnitude and components of a vector
 _quantities(f) = f.vector ? ["magnitude", "x", "y", "z"] : ["value"]
 
-# whether the shown values can be negative, i.e. need a range symmetric about zero
-_signed(f, quantity, mode) = (f.complex && mode == "phase") ||       # ±180°, also for |vector|
-    !(quantity == "magnitude" || (f.complex && mode == "magnitude"))
+# whether the shown values are magnitudes, whose colour range starts at zero
+_is_magnitude(f, quantity, mode) = !(f.complex && mode == "phase") &&
+    (quantity == "magnitude" || (f.complex && mode == "magnitude"))
+
+_component(quantity) = findfirst(==(quantity), ("x", "y", "z"))
 
 # The nodes of one axis with `refine - 1` points between each pair
 function _refined(nodes, refine::Int)
@@ -123,52 +125,75 @@ function _display_values(samples, f, quantity, mode, phase)
     return map(part, samples[:, :, findfirst(==(quantity), ("x", "y", "z"))])
 end
 
-# The largest value a point can show for this quantity and mode: the amplitude for the
-# instantaneous value, so that the global range holds for every phase
-function _bound(v, f, quantity, mode)
-    if f.vector && quantity == "magnitude"
-        f.complex || return sqrt(sum(abs2, v))
-        mode in ("instantaneous", "magnitude") && return sqrt(sum(abs2, v))
-        return sqrt(sum(abs2, mode == "real part" ? real.(v) : imag.(v)))
+# The values a point can show, as an interval: the value itself, or for the
+# instantaneous value of complex data all it takes over a period: ±|z|, or from zero
+# for the magnitude of a vector
+function _point_extent(v, f, quantity, mode)
+    if f.complex && mode == "instantaneous"
+        f.vector && quantity == "magnitude" && return (0.0, sqrt(sum(abs2, v)))
+        A = abs(f.vector ? v[_component(quantity)] : v)
+        return (-A, A)
     end
-    z = f.vector ? v[findfirst(==(quantity), ("x", "y", "z"))] : v
-    f.complex || return abs(z)
-    mode in ("instantaneous", "magnitude") && return abs(z)
-    return abs(mode == "real part" ? real(z) : imag(z))
+    part(z) = f.complex ? _complex_part(z, mode, 0) : Float64(z)
+    x = f.vector && quantity == "magnitude" ? sqrt(sum(abs2, part.(v))) :
+                                              part(f.vector ? v[_component(quantity)] : v)
+    return (x, x)
 end
 
-# The colour range from the largest value M (and the smallest positive one, for a log
-# scale): symmetric about zero for signed values, from zero otherwise
-function _range_from(M, m_pos, signed, log)
-    (isfinite(M) && M > 0) || return signed ? (-1.0, 1.0) : (log ? (0.1, 1.0) : (0.0, 1.0))
-    signed && return (-M, M)
-    log && return (min(max(m_pos, M * 1e-6), M / 10), M)   # one to six decades below the maximum
-    return (0.0, M)
-end
-
-# The colour range over the whole field and all its snapshots, from the field at the
-# grid nodes (an evenly spaced subset of them above `max_points` in all)
-function _global_range(domain, f, quantity, mode, log; max_points = 1_000_000)
-    f.complex && mode == "phase" && return (-180.0, 180.0)
+# What the colours have to cover, as (smallest, largest, smallest positive value), over
+# the whole field and all its snapshots: from the field at the grid nodes, an evenly
+# spaced subset of them above `max_points` in all
+function _global_stats(domain, f, quantity, mode; max_points = 1_000_000)
+    f.complex && mode == "phase" && return (-180.0, 180.0, NaN)
     s = max(1, ceil(Int, cbrt(domain.Np * length(f.snapshots) / max_points)))
-    M, m_pos = 0.0, Inf
+    lo, hi, m_pos = Inf, -Inf, Inf
     for data in f.snapshots, k in 1:s:domain.Nw, j in 1:s:domain.Nv, i in 1:s:domain.Nu
         v = FITToolbox.interpolate(domain, f.entity, data,
                                    domain.nodes_u[i], domain.nodes_v[j], domain.nodes_w[k])
-        b = _bound(v, f, quantity, mode)
-        isfinite(b) || continue
-        M = max(M, b)
-        b > 0 && (m_pos = min(m_pos, b))
+        a, b = _point_extent(v, f, quantity, mode)
+        (isfinite(a) && isfinite(b)) || continue
+        lo, hi = min(lo, a), max(hi, b)
+        b > 0 && (m_pos = min(m_pos, a > 0 ? a : b))
     end
-    return _range_from(M, m_pos, _signed(f, quantity, mode), log)
+    return (lo, hi, m_pos)
 end
 
-# The colour range of the values on the plane only
-function _slice_range(values, signed, log)
+# The same for the values on the plane
+function _slice_stats(values)
     vals = filter(isfinite, values)
-    isempty(vals) && return _range_from(NaN, NaN, signed, log)
+    isempty(vals) && return (NaN, NaN, NaN)
     pos = filter(>(0), vals)
-    return _range_from(maximum(abs, vals), isempty(pos) ? NaN : minimum(pos), signed, log)
+    return (minimum(vals), maximum(vals), isempty(pos) ? NaN : minimum(pos))
+end
+
+# whether a log scale can show them: none negative, some positive
+_log_possible(stats) = stats[1] >= 0 && stats[2] > 0
+
+# The colour range for values with these stats: symmetric about zero when they take
+# both signs, so that zero sits in the middle of the colour map; from zero for
+# magnitudes; from the smallest to the largest otherwise. On a log scale from the
+# smallest positive value, one to six decades below the largest.
+function _range_from(stats, magnitude, log)
+    lo, hi, m_pos = stats
+    (isfinite(lo) && isfinite(hi)) || return log ? (0.1, 1.0) : magnitude ? (0.0, 1.0) : (-1.0, 1.0)
+    if log && _log_possible(stats)
+        return (min(max(isfinite(m_pos) ? m_pos : hi, hi * 1e-6), hi / 10), hi)
+    end
+    lo < 0 < hi && return (-max(-lo, hi), max(-lo, hi))
+    magnitude && lo >= 0 && (lo = 0.0)
+    if hi - lo <= 1e-12 * max(abs(lo), abs(hi))              # one value only: around it
+        lo == hi == 0 && return magnitude ? (0.0, 1.0) : (-1.0, 1.0)
+        return (lo - 0.05 * abs(lo), hi + 0.05 * abs(hi))
+    end
+    return (lo, hi)
+end
+
+# The range narrowed by the factor s of the range slider, keeping its end nearest to
+# zero, so that the weak values spread over the colours; a log range shifts down
+function _narrowed(rng, s, log)
+    lo, hi = rng
+    (log || lo <= 0 <= hi) && return (lo * s, hi * s)
+    return hi <= 0 ? (hi - (hi - lo) * s, hi) : (lo, lo + (hi - lo) * s)
 end
 
 # The plane as a mesh through the sample points; vertex i + (j-1)·length(xs) is (xs[i], ys[j])
@@ -183,6 +208,59 @@ function _plane_mesh(axis::Int, pos, xs, ys)
                      _TriFace(idx(i, j), idx(i+1, j+1), idx(i, j+1)))
     end
     return Makie.GeometryBasics.Mesh(pts, faces)
+end
+
+# --- Arrows ------------------------------------------------------------------
+
+const _ARROWS_PER_SIDE = 22
+
+# The sample points that carry an arrow: every s-th along each axis of the plane, about
+# `n` along the longer side, centred in the first step. Returns the indices and s.
+function _arrow_lattice(nx, ny; n = _ARROWS_PER_SIDE)
+    s = max(1, ceil(Int, max(nx, ny) / n))
+    return (cld(s, 2):s:nx, cld(s, 2):s:ny), s
+end
+
+# The mode the arrows show: real vectors as they are; complex ones as their real or
+# imaginary part, or else as the instantaneous value at the phase (a magnitude or a
+# phase has no direction)
+_arrow_mode(mode) = mode in ("real part", "imaginary part") ? mode : "instantaneous"
+
+# The arrows of a vector field on the plane normal to `axis` at `pos`: the in-plane part
+# of the field at the lattice points `I` × `J` of the samples `smp`, centred on the
+# points. All `len` long, or with `scaled`, `len` × |v| / `ref`, at most `len`. Points
+# without a field (outside, or zero) get NaN, which Makie does not draw, so that the
+# number of arrows stays that of the lattice.
+function _arrows(smp, f, axis, pos, xs, ys, I, J, mode, phase; len, scaled = false, ref = 1.0)
+    a, b = _plane_axes(axis)
+    m = _arrow_mode(mode)
+    part(z) = f.complex ? _complex_part(z, m, phase) : Float64(z)
+    pts, dirs = Point3f[], Vec3f[]
+    for j in J, i in I
+        va, vb = part(smp[i, j, a]), part(smp[i, j, b])
+        mag = hypot(va, vb)
+        if !(isfinite(mag) && mag > 0)
+            push!(pts, Point3f(NaN)); push!(dirs, Vec3f(NaN))
+            continue
+        end
+        L = scaled ? len * min(1.0, mag / ref) : len
+        push!(pts, Point3f(ntuple(d -> d == axis ? pos : d == a ? xs[i] : ys[j], 3)))
+        push!(dirs, Vec3f(ntuple(d -> d == axis ? 0.0 : (d == a ? va : vb) / mag * L, 3)))
+    end
+    return pts, dirs
+end
+
+# The distance between neighbouring arrows: the smallest step of the lattice
+_arrow_spacing(xs, ys, I, J) =
+    minimum(v -> length(v) > 1 ? minimum(diff(v)) : Inf, (xs[I], ys[J])) |>
+    s -> isfinite(s) ? s : max(xs[end] - xs[1], ys[end] - ys[1])
+
+# One step of "play": the next snapshot of the field shown, after the last the first
+# again; a static field stays where it is
+function _next_step!(slider, f)
+    n = length(f.snapshots)
+    n > 1 && set_close_to!(slider, mod1(slider.value[] + 1, n))
+    return slider.value[]
 end
 
 # --- The plane and its panel section -------------------------------------------
@@ -217,9 +295,16 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
     Label(panel[row, 2:3], "fit colours to plane"; halign = :left)
     logscale = _checkbox(panel[row += 1, 1], false)
     both = GridLayout(panel[row, 2:3]; halign = :left)
-    Label(both[1, 1], "log scale"; halign = :left)
+    log_label = Observable("log scale")              # "(n/a)" for values with both signs
+    log_ok = Observable(true)                        # false for values with both signs
+    _enable!(logscale, Label(both[1, 1], log_label; halign = :left), log_ok)
     viridis = _checkbox(both[1, 2], false)
     Label(both[1, 3], "viridis"; halign = :left)
+    arrows_on = _checkbox(panel[row += 1, 1], false)
+    pair = GridLayout(panel[row, 2:3]; halign = :left)
+    arrows_label = Label(pair[1, 1], "arrows"; halign = :left)
+    scaled = _checkbox(pair[1, 2], false)
+    scaled_label = Label(pair[1, 3], "scaled length"; halign = :left)
 
     # untyped: the fields differ in type (real/complex data, entity), and an Observable
     # keeps the type of its first value
@@ -229,6 +314,9 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
         quantity_menu.options[] = _quantities(f)
         quantity_menu.i_selected[] = 1
     end
+    # arrows only for vector fields, their length only with arrows
+    _enable!(arrows_on, arrows_label, lift(f -> f.vector, field))
+    _enable!(scaled, scaled_label, lift((a, f) -> a && f.vector, arrows_on.checked, field))
     quantity = lift(q -> something(q, "value"), quantity_menu.selection)
     mode  = mode_menu === nothing ? Observable("instantaneous") : mode_menu.selection
     angle = phase === nothing ? Observable(0) : phase.value
@@ -263,8 +351,7 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
             playing[] || return
             @async try
                 while playing[] && events(ls.scene).window_open[]
-                    n = length(field[].snapshots)
-                    n > 1 && set_close_to!(time_slider, mod1(time_slider.value[] + 1, n))
+                    _next_step!(time_slider, field[])
                     sleep(0.1)
                 end
             catch err
@@ -302,18 +389,54 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
         f, smp = fs
         q in _quantities(f) || return                # the quantity menu is being switched
         v = _display_values(smp, f, q, m, φ)
-        sg = _signed(f, q, m)
-        lg = lg && !sg                               # a log scale only for magnitudes
-        rng = fitted ? _slice_range(v, sg, lg) :
-              get!(() -> _global_range(domain, f, q, m, lg), ranges, (f.name, q, m, lg))
+        stats = fitted ? _slice_stats(v) :
+                get!(() -> _global_stats(domain, f, q, m), ranges, (f.name, q, m))
+        log_label[] = _log_possible(stats) ? "log scale" : "log scale (n/a)"
+        log_ok[] = _log_possible(stats)
+        lg = lg && _log_possible(stats)              # not for values with both signs
+        rng = _range_from(stats, _is_magnitude(f, q, m), lg)
         # the range slider narrows it (the phase keeps its ±180°)
-        f.complex && m == "phase" || (rng = (rng[1] * 10.0^e, rng[2] * 10.0^e))
+        f.complex && m == "phase" || (rng = _narrowed(rng, 10.0^e, lg))
+        sg = rng[1] < 0 < rng[2]                     # about zero
         signed[] = sg
         # a log scale never sees a range from zero: the range goes first when switching
         # it on, last when switching it off
         lg ? (colorrange[] = rng; use_log[] = lg) : (use_log[] = lg; colorrange[] = rng)
         values[] = Float32.(vec(lg ? map(x -> x > 0 ? x : NaN, v) : v))
     end
+
+    # arrows of vector fields: in the plane, on a coarser lattice, all the same length or
+    # scaled to the magnitude (against the colour range's reference: the whole field,
+    # or the plane with "fit colours to plane", narrowed by the range slider)
+    arrow_data = Observable{Any}(([Point3f(NaN)], [Vec3f(NaN)]))
+    arrow_size = Observable(1.0f0)
+    onany(samples, mode, angle, fit.checked, range_exp.value, scaled.checked,
+          arrows_on.checked) do fs, m, φ, fitted, e, sc, on
+        (on && fs !== nothing) || return
+        f, smp = fs
+        f.vector || return
+        xs, ys = xs_ys[]
+        a, pos = plane_at[]
+        (I, J), _ = _arrow_lattice(length(xs), length(ys))
+        h = _arrow_spacing(xs, ys, I, J)
+        ref = 1.0
+        if sc
+            am = _arrow_mode(m)
+            ref = fitted ? maximum(v -> isfinite(v) ? v : 0.0,
+                                   _display_values(smp, f, "magnitude", am, φ); init = 0.0) :
+                  get!(() -> _global_stats(domain, f, "magnitude", am), ranges,
+                       (f.name, "magnitude", am))[2]
+            ref = ref * 10.0^e
+            ref > 0 || (ref = 1.0)
+        end
+        arrow_size[] = Float32(0.6h)
+        arrow_data[] = _arrows(smp, f, a, pos, xs, ys, I, J, m, φ; len = 0.8h, scaled = sc, ref)
+    end
+    arrow_plot = arrows3d!(ls, lift(first, arrow_data), lift(last, arrow_data); color = :black,
+                           align = :center, markerscale = arrow_size, tiplength = 0.45,
+                           tipradius = 0.3, shaftradius = 0.12, minshaftlength = 0.1,
+                           visible = lift((s, a, f) -> s && a && f.vector, field_on.checked,
+                                          arrows_on.checked, field))
 
     colormap = lift(v -> v ? :viridis : :jet, viridis.checked)
     scale = map!(l -> l ? log10 : identity, Observable{Function}(identity), use_log)   # two types
@@ -331,5 +454,7 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
                  log = logscale.checked, viridis = viridis.checked, samples, values,
                  colorrange, colormap, signed, plot = plt, field_menu, quantity_menu, mode_menu,
                  phase_slider = phase, step, time_slider, time_text, play, playing,
-                 range_slider = range_exp)
+                 range_slider = range_exp, log_label, log_box = logscale, arrows_box = arrows_on,
+                 scaled_box = scaled, arrows = arrows_on.checked, scaled = scaled.checked,
+                 arrow_data, arrow_plot)
 end
