@@ -36,10 +36,22 @@ const _NAMED_COLORS = Dict(
     "black"     => "#000000", "white"      => "#FFFFFF",
     # typical conductor colours
     "copper"    => "#B87333", "aluminium"  => "#A8A9AD", "gold"      => "#D4AF37",
+    # a cut-out (see _solid_material); view_domain draws it transparent or as a hole
+    "background" => "#D3D3D3",
 )
 
 const _HEX_COLOR = r"^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
 _valid_color(c) = occursin(_HEX_COLOR, c) || haskey(_NAMED_COLORS, lowercase(c))
+
+# The material of a new solid. color = "background" makes it a cut-out: it takes the
+# background material of the domain, whatever σ, ε_r and μ_r say.
+function _solid_material(domain, σ, ε_r, μ_r, color)
+    (color !== nothing && lowercase(color) == "background") || return Material(σ, ε_r, μ_r, color)
+    (σ, ε_r, μ_r) == (0.0, 1.0, 1.0) ||
+        @warn "color = \"background\" makes the object a cut-out of the background material; \
+               the given σ, ε_r and μ_r are ignored" σ ε_r μ_r
+    return Material(domain.σ, domain.ε_r, domain.μ_r, "background")
+end
 
 # hex code for plotting; names are resolved through _NAMED_COLORS
 _color_hex(c::String) = startswith(c, '#') ? c : _NAMED_COLORS[lowercase(c)]

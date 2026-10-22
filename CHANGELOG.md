@@ -11,7 +11,7 @@ the major version is 0, a change in the minor version marks a breaking release.
 This release records every object placed in a domain in a history. Objects can be named,
 listed, removed and undone; the whole model can be moved to another grid; and a domain
 can be saved to a file and loaded again. The functions that create objects now return
-the id of the new object. New are cylinders, loop sources along every axis, and an
+the id of the new object. New are cylinders, tori, helices, loop sources along every axis, and an
 interactive 3D view of a model, as modelled and as the grid sees it.
 
 ### Changed
@@ -36,7 +36,8 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 
 ### Added
 
-- **History:** `create_brick!`, `create_sphere!`, `create_cylinder!`,
+- **History:** `create_brick!`, `create_sphere!`, `create_cylinder!`, `create_torus!`,
+  `create_helix!`,
   `create_circular_loop_source!`, `create_rectangular_loop_source!`,
   `create_polyline_source!` and `create_electric_charge!` are recorded in the domain,
   each with a unique `obj_id`. The material is rebuilt from the
@@ -54,13 +55,25 @@ interactive 3D view of a model, as modelled and as the grid sees it.
     of one source, discretized on the current grid.
 - **Names:** every create function takes a keyword `name`, which must be unique among
   the existing objects. Unnamed objects are called `obj<id>`, a form reserved for them.
-- **Colours:** `create_brick!`, `create_sphere!` and `create_cylinder!` take a keyword
+- **Colours:** `create_brick!`, `create_sphere!`, `create_cylinder!`, `create_torus!` and
+  `create_helix!` take a keyword
   `color`: a hex code such as `"#B87333"` or a named colour, including `"copper"`,
   `"aluminium"` and `"gold"`. Colours are stored with the object, shown by
-  `list_objects` and used by `view_domain`.
+  `list_objects` and used by `view_domain`. `color = "background"` makes a solid a
+  cut-out: it takes the background material of the domain, e.g. to cut a hole into an
+  earlier object, and `view_domain` shows it as a hole.
 - **Cylinders:** `create_cylinder!(domain, u_b, v_b, w_b, radius, height, axis)`, a solid
   circular cylinder from the centre of its base face along `DirX()`, `DirY()` or
   `DirZ()`. Cells are filled by the same 50 % rule as for spheres.
+- **Tori:** `create_torus!(domain, u_c, v_c, w_c, R, r, axis)`, a solid ring around its
+  centre with ring radius `R` and tube radius `r < R`, its symmetry axis along `DirX()`,
+  `DirY()` or `DirZ()`. Same 50 % rule; saved and loaded, and drawn by `view_domain`.
+- **Helices:** `create_helix!(domain, u_b, v_b, w_b, R, r, pitch, turns, axis)`, a solid
+  helical wire, e.g. a winding: radius `R` around the axis, wire radius `r`, rising by
+  `pitch` per turn, with round ends so that leads connect. `start_angle` and
+  `left_handed` set where it starts and how it turns; `get_helix_ends` returns its end
+  points, to attach leads. Warns when the gap between the turns is below a cell, since
+  the turns would merge on the grid.
 - **Loop sources along every axis:** `create_circular_loop_source!` takes `DirY()` and
   `DirZ()` normals as well as `DirX()`; the current runs counter-clockwise about the
   normal, so the magnetic moment points along it.
@@ -77,21 +90,40 @@ interactive 3D view of a model, as modelled and as the grid sees it.
   enters and leaves the grid; an info message names them, and
   `get_source_ends(domain, name)` returns them as node indices. Loops and polylines share
   the abstract type `AbstractEdgeSource`.
+- **Source lengths:** `get_source_length(domain, name)` returns the length of a polyline
+  source, the two sides of a rectangular loop, or the circumference of a circular loop,
+  as planned and as on the grid (the edges the source occupies). A staircase is the sum
+  of the line's extents along the axes, e.g. `8R` for a circle of radius `R`, on any
+  grid.
 - **Point charges:** `create_electric_charge!(domain, u, v, w; charge)` records a point
   charge in the history; `charge` is required. `get_source` returns its charge
   vector of length `Np`, the right-hand side of the Poisson problem, with the charge in
   the dual volume of the nearest node.
 - **Domain viewer:** `view_domain(domain)` shows the model interactively in 3D. It needs
   a Makie backend with a depth buffer (GLMakie or WGLMakie) and refuses CairoMakie.
-  - A view menu switches between the objects as modelled and the voxels, i.e. the cells
-    each object occupies on the grid, drawn as surface meshes on the real, possibly
-    graded, cell boundaries.
+  - A view menu switches between the objects as defined, the objects combined into
+    smooth surfaces (later objects win, cut-outs subtracted), and the voxels, i.e. the
+    cells each object occupies on the grid, drawn as surface meshes on the real,
+    possibly graded, cell boundaries.
   - A checkbox per object, in its colour (per type above 15 objects), hides or shows it;
     so does a click on the object. "Show all" and "Reset view" restore the defaults.
   - A cut along x, y or z hides everything beyond a grid plane; in the voxel view the
     cut face is filled with the cells. The grid lines in the cut plane can be shown.
   - Loop and polyline sources can be drawn on the grid edges they occupy, with arrows
     for the direction of the current.
+  - Cut-outs (`color = "background"`) are holes in the combined and voxel views, and
+    drawn transparent where they are.
+  - Fields: `view_domain(domain, "Φ (V)" => (Φ, PrimalNode()), "B (T)" => (b, PrimalFacet()))`
+    colours a plane with a nodal, edge or facet quantity, reconstructed with
+    `interpolate`. The plane has its own checkbox and follows the cut's axis and
+    position; a menu picks the field, and for vectors the magnitude or a component.
+    Complex fields show the instantaneous value Re(F e^{jφ}) with a phase slider, or
+    their real or imaginary part, magnitude or phase. The colours span the whole field
+    (symmetric about zero for signed values) or only the plane, with an optional log
+    scale for magnitudes; jet by default, viridis as an option, and a slider narrows the
+    range. `refine` samples the plane between the grid nodes.
+  - Time series, e.g. from FDTD: `"E (V/m)" => (snapshots, PrimalEdge(), times)`, with a
+    time slider and "play"; switching fields keeps the time at the nearest snapshot.
 - **Save and load:** `save_domain(path, domain)` writes the grid, the background
   material and the full history to a human-readable TOML file; `load_domain(path)`
   rebuilds the domain from it, with `undo!` still working. Files are checked on loading:
@@ -108,12 +140,14 @@ interactive 3D view of a model, as modelled and as the grid sees it.
     `list_objects` and `get_source`.
   - `test/saveload.jl`: round trips, hand-written files and invalid or inconsistent
     files.
-  - `test/objects.jl`: material filled by `create_brick!`, `create_sphere!` and
-    `create_cylinder!`.
+  - `test/objects.jl`: material filled by `create_brick!`, `create_sphere!`,
+    `create_cylinder!`, `create_torus!` and `create_helix!`.
   - `test/sources.jl`: complex currents, the three normals of a loop and the deprecated
     `create_circular_loop_source`.
   - `test/viewer.jl`: `view_domain` built with CairoMakie and every control operated:
-    colours, groups, cut, voxel labels and meshes, loop edges.
+    colours, groups, cut, voxel labels and meshes, loop edges, and the field plane:
+    checks of the fields, sampling, complex modes, colour ranges, time series and the
+    panel.
   - `test/material_matrices.jl`: the aliases `M_σ`, `M_ε` and `M_ν`.
 
 ### Fixed

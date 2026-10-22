@@ -190,22 +190,22 @@ end
 
     # objects view: each solid has its object shown and its voxels hidden; the loop
     # shows its circle, its edges and arrows only on request
-    @test all(id -> visible(id) == [false, true], 1:3)
+    @test all(id -> visible(id) == [false, false, true], 1:3)   # as defined, not voxels or combined
     @test visible(4) == [false, false, true]
 
     # hide an object with its checkbox, bring everything back with "Show all"
     boxes[1].checked[] = false
-    @test !st.shown[1][] && visible(1) == [false, false]
+    @test !st.shown[1][] && visible(1) == [false, false, false]
     st.shown[2][] = false                                    # as by a click
     button("Show all").clicks[] += 1
     @test boxes[1].checked[] && all(id -> st.shown[id][], 1:4)
 
     # voxel view: the voxels are built, the objects hidden, the loop on its edges
     faces(id) = length(st.voxels[id][].faces)
-    view_menu.i_selected[] = 2
-    @test st.voxel_mode[]
+    view_menu.i_selected[] = findfirst(==("voxels"), view_menu.options[])
+    @test st.voxel_mode[] && !st.combined_mode[]
     @test all(id -> faces(id) > 1, 1:3)                     # more than the empty stand-in
-    @test all(id -> visible(id) == [false, true], 1:3)       # now the other one
+    @test all(id -> visible(id) == [false, false, true], 1:3)   # now the voxels
     @test visible(4) == [false, true, true]                  # circle and edges, no arrows
 
     # cut along y through the ball: a clip plane, and the voxels rebuilt with a cut face
@@ -280,7 +280,8 @@ end
     @test length(dots) == 2
     shown_at() = only(p[1][] for p in dots if p.visible[])
     @test only(shown_at()) ≈ Point3f(0.23, 0.71, 0.4)
-    only(b for b in fig.content if b isa Menu && "voxels" in b.options[]).i_selected[] = 2
+    vm = only(b for b in fig.content if b isa Menu && "voxels" in b.options[])
+    vm.i_selected[] = findfirst(==("voxels"), vm.options[])
     @test only(shown_at()) ≈ Point3f(0.2, 0.7, 0.4)
     @test haskey(st.voxels, 1) && !haskey(st.voxels, 2)            # charges have no voxels
 
@@ -320,4 +321,361 @@ end
     fig, st = _VIEW._view_figure(d)
     @test any(b -> b isa Label && b.text[] == "Currents", fig.content)  # the panel's current options
     @test length([p for (p, i) in st.plot_ids if i == 1]) == 3          # line, edges, arrows
+end
+
+# --- The field on the plane (ext/ViewField.jl) ---------------------------------
+
+_field_domain() = create_domain([1.0, 0.8, 0.6], [0.1, 0.1, 0.1])     # 11 × 9 × 7 nodes
+
+# PrimalEdge data of the uniform field E: each component times its edge length
+function _uniform_edges(d, E)
+    v = zeros(eltype(E), 3 * d.Np)
+    lengths = (d.edges_u, d.edges_v, d.edges_w)
+    for k in 1:d.Nw, j in 1:d.Nv, i in 1:d.Nu, c in 1:3
+        n = (i, j, k)[c]
+        n <= length(lengths[c]) || continue                          # no edge beyond the last node
+        v[(c-1)*d.Np + i + (j-1)*d.Nu + (k-1)*d.Nu*d.Nv] = E[c] * lengths[c][n]
+    end
+    return v
+end
+
+_node_field(d, g) = [g(get_position_of_index(d, PrimalNode(), p)[1:3]...) for p in 1:d.Np]
+
+@testset "view_domain fields: checked against the domain" begin
+    d = _field_domain()
+    specs = _VIEW._field_specs(d, ("Φ (V)" => (zeros(d.Np), PrimalNode()),
+                                   "E" => (zeros(ComplexF64, 3d.Np), PrimalEdge())))
+    @test [s.name for s in specs] == ["Φ (V)", "E"]
+    @test [s.vector for s in specs] == [false, true] && [s.complex for s in specs] == [false, true]
+    @test _VIEW._quantities(specs[1]) == ["value"]
+    @test _VIEW._quantities(specs[2]) == ["magnitude", "x", "y", "z"]
+    @test_throws "\"name\" => (data, entity)" _VIEW._field_specs(d, (zeros(d.Np),))
+    @test_throws "give (data, entity)" _VIEW._field_specs(d, ("Φ" => zeros(d.Np),))
+    @test_throws "the entity must be" _VIEW._field_specs(d, ("Φ" => (zeros(d.Np), Primal()),))
+    @test_throws "the domain needs $(3d.Np)" _VIEW._field_specs(d, ("E" => (zeros(d.Np), DualFacet()),))
+    @test_throws ArgumentError _VIEW._view_figure(d, "Φ" => (zeros(3), PrimalNode()))
+end
+
+@testset "view_domain fields: sampling the plane" begin
+    d = _field_domain()
+    @test _VIEW._refined([0.0, 1.0, 3.0], 1) == [0.0, 1.0, 3.0]
+    @test _VIEW._refined([0.0, 1.0, 3.0], 2) == [0.0, 0.5, 1.0, 2.0, 3.0]
+    @test_throws "refine must be at least 1" _VIEW._refined([0.0, 1.0], 0)
+    xs, ys = _VIEW._plane_coords(d, 2, 2)                              # a plane normal to y: x and z
+    @test length(xs) == 21 && length(ys) == 13
+
+    # a linear potential is reproduced exactly, on a node plane and between them
+    g(x, y, z) = 2x + 3y - z + 1
+    Φ = only(_VIEW._field_specs(d, ("Φ" => (_node_field(d, g), PrimalNode()),)))
+    for (axis, pos) in ((3, 0.3), (1, 0.45), (2, 0.8))
+        xs, ys = _VIEW._plane_coords(d, axis, 2)
+        smp = _VIEW._sample_plane(d, Φ, axis, pos, xs, ys)
+        a, b = _VIEW._plane_axes(axis)
+        at(i, j) = ntuple(c -> c == axis ? pos : c == a ? xs[i] : ys[j], 3)
+        @test size(smp) == (length(xs), length(ys))
+        @test all(smp[i, j] ≈ g(at(i, j)...) for i in eachindex(xs), j in eachindex(ys))
+    end
+
+    # a uniform complex edge field, everywhere on the plane including its border
+    E0 = (1.0, -2.0, 0.5) .* (1 + 2im)
+    E = only(_VIEW._field_specs(d, ("E" => (_uniform_edges(d, E0), PrimalEdge()),)))
+    smp = _VIEW._sample_plane(d, E, 3, 0.25, _VIEW._plane_coords(d, 3, 1)...)
+    @test size(smp) == (11, 9, 3) && eltype(smp) == ComplexF64
+    @test all(smp[i, j, c] ≈ E0[c] for i in 1:11, j in 1:9, c in 1:3)
+
+    # the mesh: one vertex per sample, two triangles per quad
+    m = _VIEW._plane_mesh(3, 0.25, [0.0, 0.5, 1.0], [0.0, 0.8])
+    @test length(m.position) == 6 && length(Makie.GeometryBasics.faces(m)) == 4
+    @test m.position[2 + 1*3] ≈ Point3f(0.5, 0.8, 0.25)                 # vertex i + (j-1)·length(xs)
+end
+
+@testset "view_domain fields: values and colour ranges" begin
+    d = _field_domain()
+    scalar = (vector = false, complex = true)
+    z = [3 + 4im -2im]
+    @test _VIEW._display_values(z, scalar, "value", "instantaneous", 0) ≈ [3 0]
+    @test _VIEW._display_values(z, scalar, "value", "instantaneous", 90) ≈ [-4 2]    # Re(z·j) = −Im z
+    @test _VIEW._display_values(z, scalar, "value", "magnitude", 0) ≈ [5 2]
+    @test _VIEW._display_values(z, scalar, "value", "phase", 0) ≈ [rad2deg(angle(3 + 4im)) -90]
+    @test _VIEW._display_values(z, scalar, "value", "imaginary part", 0) ≈ [4 -2]
+    @test_throws "unknown mode" _VIEW._complex_part(1im, "angle", 0)
+
+    vec3 = reshape([3.0 + 0im, 4im, 0], 1, 1, 3)                      # x real, y imaginary
+    vector = (vector = true, complex = true)
+    @test _VIEW._display_values(vec3, vector, "magnitude", "instantaneous", 0) ≈ fill(3.0, 1, 1)
+    @test _VIEW._display_values(vec3, vector, "magnitude", "instantaneous", 90) ≈ fill(4.0, 1, 1)
+    @test _VIEW._display_values(vec3, vector, "magnitude", "magnitude", 0) ≈ fill(5.0, 1, 1)
+    @test all(isnan, _VIEW._display_values(vec3, vector, "magnitude", "phase", 0))  # a vector has no phase
+    @test _VIEW._display_values(vec3, vector, "y", "real part", 0) ≈ fill(0.0, 1, 1)
+
+    # the global range: symmetric for signed values, from zero for magnitudes, the
+    # amplitude for the instantaneous value so that it holds at every phase
+    E0 = (1.0, -2.0, 0.5) .* (1 + 2im)
+    E = only(_VIEW._field_specs(d, ("E" => (_uniform_edges(d, E0), PrimalEdge()),)))
+    @test all(_VIEW._global_range(d, E, "y", "instantaneous", false) .≈ (-abs(E0[2]), abs(E0[2])))
+    @test all(_VIEW._global_range(d, E, "y", "real part", false) .≈ (-2.0, 2.0))
+    @test all(_VIEW._global_range(d, E, "magnitude", "instantaneous", false) .≈ (0.0, sqrt(sum(abs2, E0))))
+    @test _VIEW._global_range(d, E, "x", "phase", false) == (-180.0, 180.0)
+    @test _VIEW._signed(E, "magnitude", "phase")                       # so never on a log scale
+    @test _VIEW._global_range(d, E, "magnitude", "instantaneous", false; max_points = 10) ==
+          _VIEW._global_range(d, E, "magnitude", "instantaneous", false)      # a subset of the nodes
+
+    @test _VIEW._slice_range([-3.0, 1.0, NaN], true, false) == (-3.0, 3.0)
+    @test _VIEW._slice_range([0.0, 0.5, 2.0], false, false) == (0.0, 2.0)
+    @test _VIEW._slice_range([0.0, 0.01, 2.0], false, true) == (0.01, 2.0)  # log: the smallest positive
+    @test _VIEW._slice_range([0.5, 2.0], false, true) == (0.2, 2.0)        # but at least one decade
+    @test _VIEW._slice_range([2.0, 2.0], false, true) == (0.2, 2.0)        # also for a uniform field
+    @test _VIEW._slice_range([0.0, 1e-9, 2.0], false, true) == (2e-6, 2.0)  # at most six decades
+    @test _VIEW._slice_range([NaN], true, false) == (-1.0, 1.0)              # nothing to show
+    @test _VIEW._slice_range(Float64[], false, true) == (0.1, 1.0)
+end
+
+@testset "view_domain fields: the panel" begin
+    d = _field_domain()
+    fig, st = _VIEW._view_figure(d)
+    @test st.field === nothing                                          # no fields, no section
+    @test !any(b -> b isa Label && b.text[] == "Field", fig.content)
+
+    Φ = _node_field(d, (x, y, z) -> 10x - 5)
+    E0 = (1.0, -2.0, 0.5) .* (1 + 2im)
+    fig, st = _VIEW._view_figure(d, "Φ (V)" => (Φ, PrimalNode()),
+                                 "E" => (_uniform_edges(d, E0), PrimalEdge()); refine = 2)
+    f = st.field
+    @test any(b -> b isa Label && b.text[] == "Field", fig.content)
+    @test f.mode_menu !== nothing && f.phase_slider !== nothing          # a complex field among them
+    @test !f.plot.visible[] && f.samples[] === nothing                   # off: nothing sampled yet
+    @test length(f.values[]) == length(f.plot[1][].position)             # but a colour per vertex
+    @test f.colormap[] == :jet
+
+    f.on.checked[] = true
+    @test f.plot.visible[] && length(f.values[]) == 21 * 17              # the z plane, refined
+    @test f.signed[] && all(f.colorrange[] .≈ (-5.0, 5.0))
+    f.viridis[] = true
+    @test f.colormap[] == :viridis
+
+    # switch to the complex vector field: other quantities, a magnitude from zero
+    f.field_menu.i_selected[] = 2
+    @test f.quantity_menu.options[] == ["magnitude", "x", "y", "z"]
+    @test !f.signed[] && f.colorrange[][1] == 0
+    f.quantity_menu.i_selected[] = 3                                    # y
+    f.phase_slider.value[] = 90
+    @test all(≈(-imag(E0[2])), f.values[])                               # Re(E_y·j) = −Im E_y
+    f.mode_menu.i_selected[] = 4                                         # magnitude
+    f.log[] = true
+    @test f.colorrange[][1] > 0 && f.plot.colorscale[] == log10
+    f.fit[] = true
+    @test all(f.colorrange[] .≈ (abs(E0[2]) / 10, abs(E0[2])))          # uniform: one decade
+    f.log[] = false
+    @test f.plot.colorscale[] == identity
+
+    # the plane follows the cut axis, with the number of points of the new plane
+    axis_menu = only(filter(b -> b isa Menu && b.options[] == ["x", "y", "z"], fig.content))
+    for (i, n) in ((1, 17 * 13), (2, 21 * 13), (3, 21 * 17))
+        axis_menu.i_selected[] = i
+        @test length(f.values[]) == n == length(f.plot[1][].position)
+    end
+
+    # and back to the real potential
+    f.field_menu.i_selected[] = 1
+    @test f.quantity_menu.options[] == ["value"] && f.signed[]
+end
+
+@testset "view_domain fields: time series" begin
+    d = _field_domain()
+    g = _node_field(d, (x, y, z) -> 2x + 3y - z + 1)
+    times_Φ = [0.0, 1e-9, 2e-9, 3e-9]
+    snaps = [k .* g for k in 1:4]                                         # grows in time
+
+    # snapshots as a vector of vectors or as the columns of a matrix
+    Φ, Φm = _VIEW._field_specs(d, ("Φ" => (snaps, PrimalNode(), times_Φ),
+                                   "Φm" => (reduce(hcat, snaps), PrimalNode(), times_Φ)))
+    @test length(Φ.snapshots) == length(Φm.snapshots) == 4 && Φ.times == times_Φ
+    @test Φm.snapshots[3] == snaps[3]
+    @test only(_VIEW._field_specs(d, ("s" => (g, PrimalNode()),))).times === nothing
+    @test_throws "4 snapshots, but 3 times" _VIEW._field_specs(d, ("Φ" => (snaps, PrimalNode(), times_Φ[1:3]),))
+    @test_throws "give their times as well" _VIEW._field_specs(d, ("Φ" => (snaps, PrimalNode()),))
+    @test_throws "the domain needs $(d.Np)" _VIEW._field_specs(d, ("Φ" => ([g, g[1:3]], PrimalNode(), [0, 1]),))
+    @test_throws "vector of vectors or a matrix" _VIEW._field_specs(d, ("Φ" => (g, PrimalNode(), 0:0),))
+
+    # sampling one snapshot; the global range spans all of them
+    xs, ys = _VIEW._plane_coords(d, 3, 1)
+    @test _VIEW._sample_plane(d, Φ, 3, 0.3, xs, ys, 3) ≈ 3 .* _VIEW._sample_plane(d, Φ, 3, 0.3, xs, ys, 1)
+    M = maximum(abs, snaps[4])
+    @test all(_VIEW._global_range(d, Φ, "value", "instantaneous", false) .≈ (-M, M))
+
+    @test _VIEW._nearest_step([0.0, 1e-9, 2e-9], 1.4e-9) == 2
+    @test _VIEW._time_label(2.5e-12) == "2.5 ps" && _VIEW._time_label(0.0) == "0 s"
+    @test _VIEW._time_label(1.25e-9) == "1.25 ns" && _VIEW._time_label(3e-17) == "0.03 fs"
+
+    # the panel: a time slider for the series, kept at the nearest time when switching
+    times_h = times_Φ .+ 0.5e-9                                           # staggered, as e and h
+    fig, st = _VIEW._view_figure(d, "Φ (V)" => (snaps, PrimalNode(), times_Φ),
+                                 "h" => ([k .* g for k in 1:4], PrimalNode(), times_h),
+                                 "static" => (g, PrimalNode()))
+    f = st.field
+    @test f.time_slider !== nothing && f.mode_menu === nothing            # real data: no complex menu
+    @test f.time_text[] == "t = 0 s  (1/4)"
+    f.on.checked[] = true
+    v1 = copy(f.values[])
+    set_close_to!(f.time_slider, 3)
+    @test f.values[] ≈ 3 .* v1
+    @test f.time_text[] == "t = 2.0 ns  (3/4)"
+    @test endswith(only(b for b in fig.content if b isa Colorbar).label[], ", t = 2.0 ns  (3/4)")
+    @test all(f.colorrange[] .≈ (-M, M))                                  # global: fixed over time
+    f.field_menu.i_selected[] = 2
+    @test f.time_slider.value[] == 2                                      # 1.5 ns is nearest to 2 ns
+    f.field_menu.i_selected[] = 3
+    @test f.time_text[] == "static field"
+
+    # the range slider narrows the colour range, here by 10
+    f.range_slider.value[] = -1
+    @test all(f.colorrange[] .≈ (-maximum(abs, g) / 10, maximum(abs, g) / 10))
+
+    # play toggles; without a window (CairoMakie) the time does not move and it stops
+    f.field_menu.i_selected[] = 1
+    k = f.time_slider.value[]
+    f.play.clicks[] += 1
+    sleep(0.3)
+    @test f.time_slider.value[] == k && !f.playing[] && f.play.label[] == "play"
+end
+
+@testset "view_domain: tori" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_torus!(d, 0.5, 0.4, 0.6, 0.25, 0.08, DirY(); name = "ring")
+    t = only(list_objects(d)).object
+    m = _VIEW._torus_mesh(t; n = 16, m = 8)
+    @test length(m.position) == 16 * 8 && length(Makie.GeometryBasics.faces(m)) == 2 * 16 * 8
+    # every vertex at distance r from the tube's centre circle in the x–z plane, y = 0.4
+    c = (0.5, 0.4, 0.6)
+    tube(p) = hypot(hypot(p[1] - c[1], p[3] - c[3]) - 0.25, p[2] - c[2])
+    @test all(p -> isapprox(tube(p), 0.08; atol = 1e-6), m.position)
+    @test extrema(p[2] for p in m.position) == (0.32f0, 0.48f0)
+    # drawn as an object with its voxels
+    fig, st = _VIEW._view_figure(d)
+    @test length([p for (p, i) in st.plot_ids if i == 1]) == 3          # defined, voxels, combined
+end
+
+@testset "view_domain: helices" begin
+    d = create_domain([0.2, 0.2, 0.2], [0.005, 0.005, 0.005])
+    create_helix!(d, 0.05, 0.1, 0.1, 0.04, 0.008, 0.03, 2.5, DirX(); start_angle = 60,
+                  left_handed = true, name = "coil")
+    h = only(list_objects(d)).object
+    m = _VIEW._helix_mesh(h; n = 24, m = 12, nc = 4)
+    @test length(m.position) == 12 * (2 * 4 + ceil(Int, 24 * 2.5) + 1)
+    # every vertex, on the tube and on the round caps, at distance r from the centre line,
+    # measured in the helix's coordinates: axis x, angle from y towards z
+    dist(p) = sqrt(FITToolbox._helix_distance2(hypot(p[2] - 0.1, p[3] - 0.1),
+                                               atan(p[3] - 0.1, p[2] - 0.1), p[1] - 0.05,
+                                               0.04, 0.03 / 2π, deg2rad(60), -1.0, 5π))
+    @test all(p -> isapprox(dist(p), 0.008; atol = 1e-6), m.position)
+    fig, st = _VIEW._view_figure(d)
+    @test length([p for (p, i) in st.plot_ids if i == 1]) == 3          # defined, voxels, combined
+end
+
+@testset "view_domain: cut-outs" begin
+    # a core with a window cut out of it: transparent as an object, a hole in the others
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_brick!(d, 0.2, 0.4, 0.2, 0.6, 0.2, 0.6; μ_r = 1000.0, name = "core")
+    create_brick!(d, 0.3, 0.4, 0.3, 0.4, 0.2, 0.4; color = "background", name = "window")
+    @test !_VIEW._is_background(d, list_objects(d)[1].object)
+    @test _VIEW._is_background(d, list_objects(d)[2].object)
+    fig, st = _VIEW._view_figure(d)
+    plots(id) = [p for (p, i) in st.plot_ids if i == id]
+    # objects view: the window transparent over the full core
+    @test only(p for p in plots(2) if p.transparency[]) !== nothing
+    @test Makie.to_color(only(p for p in plots(2) if p.transparency[]).color[]).alpha ≈ _VIEW._BACKGROUND_ALPHA
+    @test !any(p -> p.transparency[], plots(1))
+    # voxels and combined: a hole, the core a frame around it
+    vm = only(b for b in fig.content if b isa Menu && "voxels" in b.options[])
+    @test !haskey(st.shapes, 2)                                         # a cut-out has no surface
+    for (view, meshes) in (("voxels", st.voxels), ("combined", st.shapes))
+        vm.i_selected[] = findfirst(==(view), vm.options[])
+        view == "voxels" && @test meshes[2][] === _VIEW._EMPTY_VOXELS
+        pts = meshes[1][].position
+        @test !any(p -> 0.31 < p[1] < 0.69 && 0.31 < p[3] < 0.69 && 0.41 < p[2] < 0.59, pts)
+        @test any(p -> isapprox(p[1], 0.3; atol = 0.005) && 0.31 < p[3] < 0.69, pts)   # the hole's wall
+    end
+    # in the combined view the window is still drawn, transparent, over its hole
+    @test only(p for p in plots(2) if p.transparency[]).visible[]
+
+    # only the marker counts, not the material values; a cut-out takes the background
+    # material of the domain, here ε_r = 2
+    w = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1]; ε_r = 2.0)
+    create_sphere!(w, 0.5, 0.5, 0.5, 0.3; μ_r = 5.0)
+    create_sphere!(w, 0.5, 0.5, 0.5, 0.2)                              # vacuum, not marked
+    create_sphere!(w, 0.5, 0.5, 0.5, 0.15; ε_r = 2.0)                  # background values, not marked
+    create_sphere!(w, 0.5, 0.5, 0.5, 0.1; color = "Background")        # marked, any case
+    @test [_VIEW._is_background(w, e.object) for e in list_objects(w)] == [false, false, false, true]
+    m = list_objects(w)[4].object.material
+    @test (m.σ, m.ε_r, m.μ_r, m.color) == (0.0, 2.0, 1.0, "background")
+    @test w.material[5, 5, 5, :] == [0.0, 2.0, 1.0]                     # the centre: background again
+    @test occursin("color=background", repr(MIME"text/plain"(), list_objects(w)))
+    # material keywords with a cut-out are ignored, with a warning
+    @test_logs (:warn, r"ignored") create_sphere!(w, 0.2, 0.2, 0.2, 0.1; σ = 1.0, color = "background")
+    @test list_objects(w)[5].object.material.σ == 0.0
+    # sources are never cut-outs
+    create_circular_loop_source!(w, 0.1, 0.5, 0.5, 0.5, DirZ())
+    @test !_VIEW._is_background(w, list_objects(w)[6].object)
+end
+
+@testset "view_domain: the combined view" begin
+    # the sampling grid: uniform, 240 cells along the longest side, the domain's extent
+    d = create_domain([0.4, 0.2, 0.4], [0.01, 0.01, 0.01])
+    g = _VIEW._combined_grid(d)
+    @test length.(g) == (241, 121, 241)
+    @test g[3][end] == d.nodes_w[end] && g[2][1] == d.nodes_v[1]
+    h = 0.4 / 240
+
+    # surface nets of a sphere: closed, outwards, on the sphere to within a sampling cell
+    xs = collect(range(-1.0, 1.0; length = 41))
+    F = [hypot(x, y, z) - 0.6 for x in xs, y in xs, z in xs]
+    m = _VIEW._surface_nets(xs, xs, xs, F)
+    @test all(p -> abs(hypot(p...) - 0.6) < 0.05 / 4, m.position)
+    faces = Makie.GeometryBasics.faces(m)
+    edges = Dict{Tuple{Int,Int},Int}()
+    for f in faces, (a, b) in ((1, 2), (2, 3), (3, 1))
+        e = minmax(convert(Int, f[a]), convert(Int, f[b]))
+        edges[e] = get(edges, e, 0) + 1
+    end
+    @test all(==(2), values(edges))                                    # closed: every edge twice
+    # outwards, every triangle with an area (where the surface is flat across a few
+    # cubes, three vertices can lie on a line)
+    outwards(f) = (p = m.position[convert.(Int, collect(f))]; n = cross(p[2] - p[1], p[3] - p[1]);
+                   norm(n) < 1e-12 || sum(n .* (p[1] + p[2] + p[3])) > 0)
+    @test all(outwards, faces)
+    # beyond the array counts as outside: a field cut off by the box is closed there
+    G = [x + 0.5 for x in xs, y in xs, z in xs]                       # inside for x < -0.5
+    @test _VIEW._surface_nets(xs, xs, xs, G) !== nothing
+
+    # later solids win, a cut-out makes a hole, sources make nothing
+    create_brick!(d, 0.1, 0.05, 0.1, 0.2, 0.1, 0.2; μ_r = 1000.0, name = "core")
+    create_sphere!(d, 0.2, 0.1, 0.2, 0.05; color = "background", name = "hole")
+    create_cylinder!(d, 0.2, 0.1, 0.25, 0.02, 0.1, DirZ(); σ = 1.0, name = "rod")
+    create_circular_loop_source!(d, 0.05, 0.2, 0.1, 0.1, DirZ(); name = "coil")
+    fields = _VIEW._combined_fields(d, g)
+    @test sort(collect(keys(fields))) == [1, 3]                        # no cut-out, no source
+    meshes = _VIEW._combined_meshes(fields, g)
+    core, rod = meshes[1].position, meshes[3].position
+    @test !any(p -> hypot((p .- (0.2, 0.1, 0.2))...) < 0.05 - 2h, core)   # nothing in the hole
+    @test any(p -> abs(hypot((p .- (0.2, 0.1, 0.2))...) - 0.05) < 2h, core) # but its wall
+    @test !any(p -> hypot(p[1] - 0.2, p[2] - 0.1) < 0.02 - 2h && 0.25 + 2h < p[3] < 0.3 - 2h, core)
+    @test all(extrema(p[3] for p in rod) .≈ (0.25, 0.35))               # the rod whole, through the core
+    # with a cut along z at 0.3 m: closed at the cut, nothing beyond
+    cut = _VIEW._combined_meshes(fields, g; cut = (3, 0.3))
+    @test maximum(p[3] for p in cut[1].position) <= 0.3 + 1e-6
+    @test maximum(p[3] for p in cut[3].position) ≈ 0.3 atol = 1e-6
+
+    # the view: surfaces only in the combined view, loops as defined, cut-outs transparent
+    fig, st = _VIEW._view_figure(d)
+    vm = only(b for b in fig.content if b isa Menu && "combined" in b.options[])
+    @test vm.options[] == ["defined", "combined", "voxels"] && vm.selection[] == "defined"
+    vm.i_selected[] = findfirst(==("combined"), vm.options[])
+    @test st.combined_mode[] && !st.voxel_mode[]
+    vis(id) = sort([p.visible[] for (p, i) in st.plot_ids if i == id])
+    @test vis(1) == [false, false, true] && st.shapes[1][] !== _VIEW._EMPTY_VOXELS
+    @test vis(2) == [false, true]                                      # the cut-out, transparent
+    @test any(p -> p.visible[], [p for (p, i) in st.plot_ids if i == 4])  # the loop's circle
+    full = length(Makie.GeometryBasics.faces(st.shapes[1][]))
+    [b for b in fig.content if b isa Checkbox][end-3].checked[] = true    # cut along z at 0.2 m
+    @test 0 < length(Makie.GeometryBasics.faces(st.shapes[1][])) < full
 end

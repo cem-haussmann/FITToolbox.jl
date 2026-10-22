@@ -34,6 +34,10 @@ A cell takes the material when at least half of it lies inside the cylinder, jud
 cylinder is therefore exact on the grid wherever its end faces fall on nodes; across
 it, the circle becomes a staircase that is the same in every cell layer.
 
+With `color = "background"` the cylinder is a cut-out: it takes the background material of
+the domain (`σ`, `ε_r` and `μ_r` are ignored), e.g. to cut a hole into an earlier object,
+and `view_domain` shows it as such.
+
 Throws an `ArgumentError` if `radius` or `height` is not positive, if the centre of the
 base face lies outside the domain, or if `name` is already used; nothing is recorded
 then. Warns if the cylinder reaches beyond the domain (it is clipped) or fills no cell.
@@ -52,10 +56,34 @@ function create_cylinder!(domain::FITDomain, u_b, v_b, w_b, radius, height, axis
     unitToMeter = check_units(units)
     cylinder = Cylinder((u_b*unitToMeter, v_b*unitToMeter, w_b*unitToMeter),
                         radius*unitToMeter, height*unitToMeter, axis,
-                        Material(σ, ε_r, μ_r, color))
+                        _solid_material(domain, σ, ε_r, μ_r, color))
     name = _resolve_name(domain, name)
     _apply!(domain, cylinder)
     return _record_create!(domain, cylinder; name)
+end
+
+# The solid as a point test, on coordinates relative to _reference, and its bounding box
+_reference(c::Cylinder) = c.base
+function _inside_test(c::Cylinder)
+    a = _axis_index(c.axis)                   # along the axis
+    b, d = filter(!=(a), (1, 2, 3))           # across it
+    R, H = c.radius, c.height
+    return s -> 0 <= s[a] <= H && hypot(s[b], s[d]) <= R
+end
+function _extent(c::Cylinder)
+    a = _axis_index(c.axis)
+    return (ntuple(d -> d == a ? c.base[d] : c.base[d] - c.radius, 3),
+            ntuple(d -> d == a ? c.base[d] + c.height : c.base[d] + c.radius, 3))
+end
+
+# Signed distance to the surface, on coordinates relative to _reference: negative inside.
+# Only the views use it (smooth surfaces, cut-outs subtracted).
+function _signed_distance(c::Cylinder, p)
+    a = _axis_index(c.axis)
+    b, d = filter(!=(a), (1, 2, 3))
+    radial = hypot(p[b], p[d]) - c.radius
+    axial  = abs(p[a] - c.height / 2) - c.height / 2
+    return hypot(max(radial, 0.0), max(axial, 0.0)) + min(max(radial, axial), 0.0)
 end
 
 function _apply!(domain::FITDomain, cyl::Cylinder)
@@ -87,7 +115,7 @@ function _apply!(domain::FITDomain, cyl::Cylinder)
     du = domain.nodes_u .- cyl.base[1]
     dv = domain.nodes_v .- cyl.base[2]
     dw = domain.nodes_w .- cyl.base[3]
-    inside(s) = 0 <= s[a] <= H && hypot(s[b], s[c]) <= R
+    inside = _inside_test(cyl)
 
     # k outermost for threading (stride Nu*Nv, so threads write far apart),
     # i innermost because md is contiguous in i.

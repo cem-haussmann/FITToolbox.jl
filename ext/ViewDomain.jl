@@ -63,6 +63,12 @@ function _object_colors(entries)
     return colors
 end
 
+# A cut-out, a solid with color = "background": transparent in the objects view, a hole
+# in the geometry and voxel views. Only the marker counts: an object that merely has
+# vacuum values, e.g. one not given a material yet, is drawn as any other.
+_is_background(domain, o) = o isa FITToolbox.AbstractSolid && o.material.color == "background"
+const _BACKGROUND_ALPHA = 0.15
+
 _axis_index(::DirX) = 1
 _axis_index(::DirY) = 2
 _axis_index(::DirZ) = 3
@@ -161,7 +167,8 @@ function _owner_labels(domain)
     Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
         for e in FITToolbox.list_objects(domain).entries
             e.object isa FITToolbox.AbstractSolid || continue
-            FITToolbox._apply!(scratch, _with_material(e.object, FITToolbox.Material(e.obj_id, 1.0, 1.0)))
+            id = _is_background(domain, e.object) ? 0 : e.obj_id      # background: a hole
+            FITToolbox._apply!(scratch, _with_material(e.object, FITToolbox.Material(id, 1.0, 1.0)))
         end
     end
     return round.(Int, view(scratch.material, :, :, :, 1))
@@ -256,6 +263,72 @@ _draw_object!(scene, c::FITToolbox.Cylinder, color; kw...) =
 
 _cylinder_top(c) = ntuple(d -> d == _axis_index(c.axis) ? c.base[d] + c.height : c.base[d], 3)
 
+_draw_object!(scene, t::FITToolbox.Torus, color; kw...) = mesh!(scene, _torus_mesh(t); color, kw...)
+
+# A torus as a triangle mesh: `n` segments around the axis, `m` around the tube, with
+# normals pointing out of the tube
+function _torus_mesh(t::FITToolbox.Torus; n = 64, m = 32)
+    a = _axis_index(t.axis)
+    b, c = filter(!=(a), (1, 2, 3))
+    R, r = t.major_radius, t.minor_radius
+    pts, nrm = Point3f[], Vec3f[]
+    for i in 0:n-1, j in 0:m-1
+        θ, φ = 2π * i / n, 2π * j / m
+        dir = ntuple(d -> d == a ? sin(φ) : cos(φ) * (d == b ? cos(θ) : sin(θ)), 3)
+        ring = ntuple(d -> d == a ? 0.0 : R * (d == b ? cos(θ) : sin(θ)), 3)
+        push!(pts, Point3f(t.center .+ ring .+ r .* dir))
+        push!(nrm, Vec3f(dir))
+    end
+    idx(i, j) = mod(i, n) * m + mod(j, m) + 1
+    faces = _TriFace[]
+    for i in 0:n-1, j in 0:m-1
+        push!(faces, _TriFace(idx(i, j), idx(i+1, j), idx(i+1, j+1)),
+                     _TriFace(idx(i, j), idx(i+1, j+1), idx(i, j+1)))
+    end
+    return Makie.GeometryBasics.Mesh(pts, faces; normal = nrm)
+end
+
+_draw_object!(scene, h::FITToolbox.Helix, color; kw...) = mesh!(scene, _helix_mesh(h); color, kw...)
+
+# A helix as one triangle mesh: rings of `m` vertices around the wire, `n` per turn along
+# it, and its round ends as half spheres of `nc` rings each, continuing the same grid
+function _helix_mesh(h::FITToolbox.Helix; n = 48, m = 16, nc = 6)
+    a = _axis_index(h.axis)
+    b, c = FITToolbox._cyclic_axes(h.axis)
+    e(d) = ntuple(i -> Float64(i == d), 3)
+    s, T, R, P = h.left_handed ? -1 : 1, 2π * h.turns, h.major_radius, h.pitch / 2π
+    unit(v) = v ./ sqrt(sum(abs2, v))
+    cross3(x, y) = (x[2]*y[3] - x[3]*y[2], x[3]*y[1] - x[1]*y[3], x[1]*y[2] - x[2]*y[1])
+    # the frame along the centre line: tangent, towards the axis, and their cross product
+    function frame(t)
+        θ = deg2rad(h.start_angle) + s * t
+        tang = unit(R * s .* (-sin(θ) .* e(b) .+ cos(θ) .* e(c)) .+ P .* e(a))
+        nrm = .-(cos(θ) .* e(b) .+ sin(θ) .* e(c))
+        return FITToolbox._helix_point(h, t), tang, nrm, cross3(tang, nrm)
+    end
+    # rings: (parameter t, angle α out of the ring's plane: ±π/2 at the poles of the caps)
+    nt = max(2, ceil(Int, n * h.turns))
+    rings = [[(0.0, α) for α in range(-π/2, 0; length = nc + 1)[1:end-1]];
+             [(t, 0.0) for t in range(0, T; length = nt + 1)];
+             [(T, α) for α in range(0, π/2; length = nc + 1)[2:end]]]
+    pts, nrms = Point3f[], Vec3f[]
+    for (t, α) in rings
+        p, tang, N, B = frame(t)
+        for φ in range(0, 2π; length = m + 1)[1:end-1]
+            dir = cos(α) .* (cos(φ) .* N .+ sin(φ) .* B) .+ sin(α) .* tang
+            push!(pts, Point3f(p .+ h.minor_radius .* dir))
+            push!(nrms, Vec3f(dir))
+        end
+    end
+    idx(i, j) = (i - 1) * m + mod(j, m) + 1
+    faces = _TriFace[]
+    for i in 1:length(rings)-1, j in 0:m-1
+        push!(faces, _TriFace(idx(i, j), idx(i+1, j), idx(i+1, j+1)),
+                     _TriFace(idx(i, j), idx(i+1, j+1), idx(i, j+1)))
+    end
+    return Makie.GeometryBasics.Mesh(pts, faces; normal = nrms)
+end
+
 _draw_object!(scene, s::FITToolbox.Sphere, color; kw...) =
     mesh!(scene, Makie.GeometryBasics.normal_mesh(
                      Makie.Tessellation(Makie.Sphere(Point3f(s.center), Float32(s.radius)), 64));
@@ -285,15 +358,18 @@ function _picked_id(plot_ids, plt)
     return nothing
 end
 
-function FITToolbox.view_domain(domain::FITToolbox.FITDomain; size = (1400, 750))
+function FITToolbox.view_domain(domain::FITToolbox.FITDomain, fields::Pair...;
+                                size = (1400, 750), refine::Int = 1)
     _check_3d_backend()
-    fig, _ = _view_figure(domain; size)
+    fig, _ = _view_figure(domain, fields...; size, refine)
     return fig
 end
 
 # The figure with all its controls, and the state they act on, for the tests:
 # CairoMakie cannot draw it, but can build it and run every callback.
-function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
+function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
+                      size = (1400, 750), refine::Int = 1)
+    specs = _field_specs(domain, fields)             # checked before anything is drawn
 
     entries = FITToolbox.list_objects(domain).entries
     colors  = _object_colors(entries)
@@ -311,7 +387,8 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
     planes = Observable(Plane3f[])
     plot_ids = IdDict{Any,Int}()
     # switched by the "View" menu and the "Currents" toggles in the panel
-    voxel_mode = Observable(false)
+    voxel_mode    = Observable(false)
+    combined_mode = Observable(false)
     edges_on   = Observable(false)
     arrows_on  = Observable(false)
     # loops show the edges they occupy when asked to, and always in the voxel view,
@@ -346,8 +423,14 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
                                 clip_planes = planes, visible = lift(&, shown[id], voxel_mode))
             plot_ids[plt] = id
         else
-            plt = _draw_object!(ls, e.object, c; clip_planes = planes,
-                                visible = lift((s, v) -> s && !v, shown[id], voxel_mode))
+            # as defined: a solid in the defined view only, the combined view draws its
+            # surface instead; a cut-out transparent, also over the hole it makes in
+            # the combined view
+            bg = _is_background(domain, e.object)
+            plt = _draw_object!(ls, e.object, bg ? (c, _BACKGROUND_ALPHA) : c;
+                                transparency = bg, clip_planes = planes,
+                                visible = lift((s, v, g) -> s && !v && (bg || !g), shown[id],
+                                               voxel_mode, combined_mode))
             plot_ids[plt] = id
         end
     end
@@ -361,14 +444,24 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
         plt = mesh!(ls, m; color = colors[id], visible = lift(&, shown[id], voxel_mode))
         plot_ids[plt] = id
     end
+    # the combined surfaces, of the solids that are not cut-outs; built when the
+    # combined view is first opened. Untyped: the meshes carry normals, the stand-in not
+    shapes = Dict(e.obj_id => Observable{Any}(_EMPTY_VOXELS) for e in entries
+                  if e.object isa FITToolbox.AbstractSolid && !_is_background(domain, e.object))
+    for (id, m) in shapes
+        plt = mesh!(ls, m; color = colors[id], visible = lift(&, shown[id], combined_mode))
+        plot_ids[plt] = id
+    end
 
     # --- panel, in two columns so that it fits the window: view and objects (up to
     # _MAX_OBJECT_TOGGLES checkboxes) in the first, cut and currents in the second ---
     panel = GridLayout(fig[1, 2]; tellheight = false, valign = :top)
     row = 0
     Label(panel[row += 1, 1], "View"; font = :bold, halign = :left)
-    view_menu = Menu(panel[row, 2:3]; options = ["objects", "voxels"], default = "objects")
+    view_menu = Menu(panel[row, 2:3]; options = ["defined", "combined", "voxels"],
+                     default = "defined")
     connect!(voxel_mode, lift(==("voxels"), view_menu.selection))
+    connect!(combined_mode, lift(==("combined"), view_menu.selection))
     Label(panel[row += 1, 1:3], "Objects"; font = :bold, halign = :left)
     isempty(entries) && Label(panel[row += 1, 1:3], "none"; halign = :left)
 
@@ -424,6 +517,22 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
     end
     onany((_...) -> update_voxels!(), voxel_mode, cut_on.checked, axis, slider.value)
 
+    grid = Ref{Any}(nothing)                                 # the sampling, on first use
+    fields = Ref{Any}(nothing)
+    function update_shapes!()
+        combined_mode[] || return
+        if fields[] === nothing
+            grid[] = _combined_grid(domain)
+            fields[] = _combined_fields(domain, grid[])
+        end
+        cut = cut_on.checked[] ? (axis[], slider.value[]) : nothing
+        meshes = _combined_meshes(fields[], grid[]; cut)
+        for (id, m) in shapes
+            m[] = get(meshes, id, _EMPTY_VOXELS)
+        end
+    end
+    onany((_...) -> update_shapes!(), combined_mode, cut_on.checked, axis, slider.value)
+
     # the grid in the cut plane, shown while the cut is active
     grid_on = _checkbox(panel[row += 1, 1], false)
     Label(panel[row, 2:3], "grid in cut plane"; halign = :left)
@@ -440,6 +549,12 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
         t = _checkbox(panel[row += 1, 1], false)
         Label(panel[row, 2:3], "current direction"; halign = :left)
         connect!(arrows_on, t.checked)
+    end
+
+    # --- a field on the plane of the cut ---
+    field = nothing
+    if !isempty(specs)
+        row, field = _add_field!(ls, panel, row, domain, specs, axis, slider; refine)
     end
     lines!(ls, lift((a, pos) -> _cut_rectangle(lo, hi, a, pos), axis, slider.value);
            color = :black, linestyle = :dash, visible = cut_on.checked)
@@ -467,5 +582,6 @@ function _view_figure(domain::FITToolbox.FITDomain; size = (1400, 750))
 
     colsize!(fig.layout, 2, Fixed(270))
     colsize!(fig.layout, 3, Fixed(250))
-    return fig, (; ls, shown, voxels, voxel_mode, planes, plot_ids, info)
+    return fig, (; ls, shown, voxels, voxel_mode, shapes, combined_mode, planes, plot_ids, info,
+                 field)
 end

@@ -95,6 +95,20 @@ function _step_to_dict(s::CreateObject)
         d["radius"] = o.radius
         d["height"] = o.height
         d["axis"]   = string(nameof(typeof(o.axis)))
+    elseif o isa Torus
+        d["center"]       = collect(o.center)
+        d["major_radius"] = o.major_radius
+        d["minor_radius"] = o.minor_radius
+        d["axis"]         = string(nameof(typeof(o.axis)))
+    elseif o isa Helix
+        d["base"]         = collect(o.base)
+        d["major_radius"] = o.major_radius
+        d["minor_radius"] = o.minor_radius
+        d["pitch"]        = o.pitch
+        d["turns"]        = o.turns
+        d["axis"]         = string(nameof(typeof(o.axis)))
+        d["start_angle"]  = o.start_angle
+        d["left_handed"]  = o.left_handed
     elseif o isa PointCharge
         d["position"] = collect(o.position)
         d["charge"]   = o.charge
@@ -140,6 +154,12 @@ function _step_from_dict(d)
         Sphere(Tuple(d["center"]), d["radius"], material())
     elseif t == "Cylinder"
         Cylinder(Tuple(d["base"]), d["radius"], d["height"], _DIRECTIONS[d["axis"]], material())
+    elseif t == "Torus"
+        Torus(Tuple(d["center"]), d["major_radius"], d["minor_radius"], _DIRECTIONS[d["axis"]],
+              material())
+    elseif t == "Helix"
+        Helix(Tuple(d["base"]), d["major_radius"], d["minor_radius"], d["pitch"], d["turns"],
+              _DIRECTIONS[d["axis"]], d["start_angle"], d["left_handed"], material())
     elseif t == "PointCharge"
         PointCharge(Tuple(d["position"]), d["charge"])
     elseif t == "PolylineSource"

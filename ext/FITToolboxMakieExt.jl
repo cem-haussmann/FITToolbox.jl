@@ -110,5 +110,7 @@ function FITToolbox.plot_nodal_values(config, ::Primal, data::AbstractVector, no
 end
 
 include("ViewDomain.jl")
+include("ViewCombined.jl")
+include("ViewField.jl")
 
 end # module FITToolboxMakieExt

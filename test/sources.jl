@@ -403,3 +403,39 @@ end
     @test_throws "not a polyline source" get_source_ends(g, "frame")
     @test_throws ArgumentError get_source_ends(g, "nothing")
 end
+
+@testset "get_source_length" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.01, 0.01, 0.01])
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+
+    # a circle: a staircase of 8R, 4/π times the circumference
+    create_circular_loop_source!(d, 0.2, 0.5, 0.5, 0.5, DirZ(); name = "circle")
+    c = get_source_length(d, "circle")
+    @test c.planned ≈ 2π * 0.2 && c.actual ≈ 8 * 0.2
+
+    # a rectangle: the sides as given, snapped to the nodes, in the order given
+    create_rectangular_loop_source!(d, 0.231, 0.312, 0.5, 0.347, 0.2, DirZ(); name = "rect")
+    r = get_source_length(d, "rect")
+    @test r.planned == (0.347, 0.2) && all(r.actual .≈ (0.35, 0.2))
+    id = create_rectangular_loop_source!(d, 0.5, 0.231, 0.312, 0.2, 0.347, DirX(); current = 2 + 1im)
+    @test all(get_source_length(d, id).actual .≈ (0.2, 0.35))           # v, then w; any current
+
+    # polylines: exact along an axis, longer on a diagonal (the sum of the extents)
+    quiet() do
+        create_polyline_source!(d, [(0.1, 0.1, 0.1), (0.9, 0.1, 0.1)]; name = "axis")
+        create_polyline_source!(d, [(0.1, 0.2, 0.3), (0.5, 0.6, 0.3)]; name = "diagonal")
+    end
+    @test get_source_length(d, "axis").planned ≈ 0.8 && get_source_length(d, "axis").actual ≈ 0.8
+    g = get_source_length(d, "diagonal")
+    @test g.planned ≈ hypot(0.4, 0.4) && g.actual ≈ 0.8                 # √2 longer
+    # a closed square is its perimeter, like the rectangle
+    create_polyline_source!(d, [(0.2, 0.2, 0.7), (0.6, 0.2, 0.7), (0.6, 0.5, 0.7), (0.2, 0.5, 0.7)];
+                            closed = true, name = "square")
+    s = get_source_length(d, "square")
+    @test s.planned ≈ 1.4 && s.actual ≈ 1.4
+
+    # only for these sources
+    create_sphere!(d, 0.5, 0.5, 0.5, 0.1; name = "ball")
+    @test_throws "not a polyline source, rectangular loop or circular loop" get_source_length(d, "ball")
+    @test_throws "no object named" get_source_length(d, "nothing")
+end

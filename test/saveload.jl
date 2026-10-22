@@ -281,6 +281,45 @@ end
     end
 end
 
+@testset "save/load: tori" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_torus!(d, 0.5, 0.5, 0.5, 0.25, 0.08, DirZ(); μ_r = 2000.0, name = "core", color = "darkgray")
+    create_torus!(d, 0.3, 0.5, 0.5, 0.15, 0.05, DirX(); σ = 5.8e7)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "tori.toml"), d)
+        @test occursin("minor_radius = 0.08", read(path, String))
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test e.material == d.material
+    end
+end
+
+@testset "save/load: helices" begin
+    d = create_domain([0.2, 0.2, 0.2], [0.005, 0.005, 0.005])
+    create_helix!(d, 0.1, 0.1, 0.05, 0.04, 0.008, 0.03, 3, DirZ(); σ = 5.8e7, name = "coil", color = "copper")
+    create_helix!(d, 0.05, 0.1, 0.1, 0.03, 0.006, 0.02, 2.5, DirX(); start_angle = 135,
+                  left_handed = true, μ_r = 50.0)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "helices.toml"), d)
+        @test occursin("left_handed = true", read(path, String))
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test e.material == d.material
+        @test get_helix_ends(e, 2) == get_helix_ends(d, 2)
+    end
+end
+
+@testset "save/load: cut-outs" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1]; ε_r = 2.0)
+    create_brick!(d, 0.2, 0.2, 0.2, 0.6, 0.6, 0.6; μ_r = 1000.0, name = "core")
+    create_brick!(d, 0.3, 0.2, 0.3, 0.4, 0.6, 0.4; color = "background", name = "window")
+    mktempdir() do dir
+        e = load_domain(save_domain(joinpath(dir, "cutout.toml"), d))
+        @test e._history.steps == d._history.steps && e.material == d.material
+        @test list_objects(e)[2].object.material.color == "background"
+    end
+end
+
 @testset "save/load: point charges" begin
     d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
     create_electric_charge!(d, 0.5, 0.5, 0.5; charge = 1.602176634e-19, name = "proton")

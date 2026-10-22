@@ -17,12 +17,24 @@ function create_brick!(domain::FITDomain, u_o, v_o, w_o, u_length, v_length, w_l
     unitToMeter = check_units(units)
     brick = Brick((u_o*unitToMeter, v_o*unitToMeter, w_o*unitToMeter),
                   (u_length*unitToMeter, v_length*unitToMeter, w_length*unitToMeter),
-                  Material(σ, ε_r, μ_r, color))
+                  _solid_material(domain, σ, ε_r, μ_r, color))
     name = _resolve_name(domain, name)
     _apply!(domain, brick)
     return _record_create!(domain, brick; name)
 end
 
+
+# The solid as a point test, on coordinates relative to _reference, and its bounding box
+# (the material snaps the brick to the nearest nodes instead, see _apply!)
+_reference(b::Brick) = b.origin
+_inside_test(b::Brick) = (L = b.lengths; p -> 0 <= p[1] <= L[1] && 0 <= p[2] <= L[2] && 0 <= p[3] <= L[3])
+_extent(b::Brick) = (b.origin, b.origin .+ b.lengths)
+# Signed distance to the surface, on coordinates relative to _reference: negative inside.
+# Only the views use it (smooth surfaces, cut-outs subtracted).
+function _signed_distance(b::Brick, p)
+    q = ntuple(d -> abs(p[d] - b.lengths[d] / 2) - b.lengths[d] / 2, 3)
+    return hypot(max(q[1], 0.0), max(q[2], 0.0), max(q[3], 0.0)) + min(max(q[1], q[2], q[3]), 0.0)
+end
 
 function _apply!(domain::FITDomain, brick::Brick)
     u_min, v_min, w_min = brick.origin

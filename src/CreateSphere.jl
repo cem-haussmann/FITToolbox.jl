@@ -17,11 +17,19 @@ function create_sphere!(domain::FITDomain, u_o, v_o, w_o, radius;
     unitToMeter = check_units(units)
     sphere = Sphere((u_o*unitToMeter, v_o*unitToMeter, w_o*unitToMeter),
                     radius*unitToMeter,
-                    Material(σ, ε_r, μ_r, color))
+                    _solid_material(domain, σ, ε_r, μ_r, color))
     name = _resolve_name(domain, name)
     _apply!(domain, sphere)
     return _record_create!(domain, sphere; name)
 end
+
+# The solid as a point test, on coordinates relative to _reference, and its bounding box
+_reference(s::Sphere) = s.center
+_inside_test(s::Sphere) = (r = s.radius; p -> hypot(p[1], p[2], p[3]) <= r)   # robust against overflow
+_extent(s::Sphere) = (s.center .- s.radius, s.center .+ s.radius)
+# Signed distance to the surface, on coordinates relative to _reference: negative inside.
+# Only the views use it (smooth surfaces, cut-outs subtracted).
+_signed_distance(s::Sphere, p) = hypot(p[1], p[2], p[3]) - s.radius
 
 function _apply!(domain::FITDomain, sphere::Sphere)
     start_pos_u, start_pos_v, start_pos_w = sphere.center
@@ -52,6 +60,7 @@ function _apply!(domain::FITDomain, sphere::Sphere)
     du = domain.nodes_u .- start_pos_u
     dv = domain.nodes_v .- start_pos_v
     dw = domain.nodes_w .- start_pos_w
+    inside = _inside_test(sphere)
 
     # k outermost for threading (stride Nu*Nv, so threads write far apart),
     # i innermost because md is contiguous in i.
@@ -69,11 +78,10 @@ function _apply!(domain::FITDomain, sphere::Sphere)
                 uw = (du[i+1] - du[i]) / 6.0
                 u_samples = (du[i] + uw, du[i] + 3.0*uw, du[i] + 5.0*uw)
 
-                # 27 sub-voxel centres at 1/6, 3/6, 5/6 of the cell in each
-                # direction; hypot is robust against overflow and underflow.
+                # 27 sub-voxel centres at 1/6, 3/6, 5/6 of the cell in each direction
                 count_inside = 0
                 for us in u_samples, vs in v_samples, ws in w_samples
-                    hypot(us, vs, ws) <= r && (count_inside += 1)
+                    inside((us, vs, ws)) && (count_inside += 1)
                 end
 
                 # 50% fill rule: assign the material if 14 or more are inside
