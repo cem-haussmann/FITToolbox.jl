@@ -12,7 +12,7 @@ const _VIEW = Base.get_extension(FITToolbox, :FITToolboxMakieExt)
 _view_domain() = (d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05]);
                   create_brick!(d, 0.6, 0.1, 0.1, 0.1, 0.8, 0.8; σ = 5.8e7, name = "shield", color = "copper");
                   create_sphere!(d, 0.25, 0.5, 0.5, 0.15; ε_r = 4.0);
-                  create_circular_loop_source!(d, 0.1, 0.4, 0.5, 0.5, DirX(); name = "coil");
+                  create_circular_loop_source!(d, 0.4, 0.5, 0.5, 0.1, DirX(); name = "coil");
                   d)
 
 @testset "view_domain: refuses backends without depth buffer" begin
@@ -33,9 +33,13 @@ end
     @test isdisjoint(_VIEW._OBJECT_PALETTE, [values(_VIEW._CHARGE_COLORS)..., "#0072B2", "#56B4E9", "#D55E00"])
     # one distinct colour for every object that gets its own checkbox
     @test allunique(_VIEW._OBJECT_PALETTE) && length(_VIEW._OBJECT_PALETTE) >= _VIEW._MAX_OBJECT_TOGGLES
+    # tiny spheres, most filling no cell: only their number and colours matter here
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
     m = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
-    for k in 1:_VIEW._MAX_OBJECT_TOGGLES
-        create_sphere!(m, 0.05 + 0.06k, 0.5, 0.5, 0.03)
+    quiet() do
+        for k in 1:_VIEW._MAX_OBJECT_TOGGLES
+            create_sphere!(m, 0.05 + 0.06k, 0.5, 0.5, 0.03)
+        end
     end
     @test allunique(values(_VIEW._object_colors(list_objects(m).entries)))
 
@@ -47,8 +51,10 @@ end
 
     # more: one toggle per type, in order of first appearance
     m = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
-    for k in 1:20
-        create_sphere!(m, 0.1 + 0.04k, 0.5, 0.5, 0.03)
+    quiet() do
+        for k in 1:20
+            create_sphere!(m, 0.1 + 0.04k, 0.5, 0.5, 0.03)
+        end
     end
     create_brick!(m, 0.1, 0.1, 0.1, 0.2, 0.2, 0.2)
     e = list_objects(m).entries
@@ -99,7 +105,7 @@ end
 
 @testset "view_domain: loop on its grid edges" begin
     d = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5])          # the grid of sources.jl
-    create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); current = -3.0 + 2im, name = "coil")
+    create_circular_loop_source!(d, 10.3, 15.2, 14.9, 8.0, DirX(); current = -3.0 + 2im, name = "coil")
     loop = only(list_objects(d)).object
     segs, mids, dirs = _VIEW._loop_edges(d, loop)
     J = get_source(d, "coil")
@@ -123,7 +129,8 @@ end
     create_brick!(d, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5; σ = 5.0)          # cells 1:2
     create_brick!(d, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5; ε_r = 3.0)     # cells 2:3, overlaps
     create_brick!(d, 0.75, 0.75, 0.75, 0.25, 0.25, 0.25)             # removed below
-    create_circular_loop_source!(d, 0.2, 0.25, 0.25, 0.25, DirX())   # no cells
+    # a source fills no cells; this loop reaches into the first cells, and is closed there
+    @test_logs create_circular_loop_source!(d, 0.25, 0.25, 0.25, 0.2, DirX())
     remove_object!(d, 3)
     lab = _VIEW._owner_labels(d)
     @test size(lab) == (4, 4, 4)
@@ -176,7 +183,7 @@ end
     create_brick!(d, 0.1, 0.1, 0.1, 0.8, 0.8, 0.1; σ = 5.8e7, name = "shield", color = "copper")
     create_sphere!(d, 0.5, 0.5, 0.55, 0.15; ε_r = 4.0, name = "ball")
     create_cylinder!(d, 0.2, 0.75, 0.2, 0.1, 0.6, DirZ(); name = "rod")
-    create_circular_loop_source!(d, 0.1, 0.5, 0.5, 0.3, DirZ(); name = "coil")
+    create_circular_loop_source!(d, 0.5, 0.5, 0.3, 0.1, DirZ(); name = "coil")
     fig, st = _VIEW._view_figure(d)
 
     boxes  = [b for b in fig.content if b isa Checkbox]   # 4 objects, cut, grid, 2 loop options
@@ -185,10 +192,13 @@ end
     axis_menu = only(b for b in fig.content if b isa Menu && "y" in b.options[])
     slider = only(b for b in fig.content if b isa Slider)
     @test length(boxes) == 8
+    # the size of the grid in the panel, digits in groups of three
+    @test any(b -> b isa Label && b.text[] == "8 000 cells: 20 × 20 × 20", fig.content)
+    @test _VIEW._thousands(1_600_000_000) == "1 600 000 000" && _VIEW._thousands(999) == "999"
     @test Makie.ncols(fig.layout) == 3                         # scene and a panel of two columns
     visible(id) = sort([p.visible[] for (p, i) in st.plot_ids if i == id])
 
-    # objects view: each solid has its object shown and its voxels hidden; the loop
+    # defined view: each solid has its object shown and its voxels hidden; the loop
     # shows its circle, its edges and arrows only on request
     @test all(id -> visible(id) == [false, false, true], 1:3)   # as defined, not voxels or combined
     @test visible(4) == [false, false, true]
@@ -220,7 +230,7 @@ end
     boxes[5].checked[] = false
     @test isempty(st.planes[]) && faces(2) == full
 
-    # loop options in the objects view
+    # loop options in the defined view
     view_menu.i_selected[] = 1
     boxes[7].checked[] = true; boxes[8].checked[] = true
     @test visible(4) == [true, true, true]
@@ -268,6 +278,31 @@ end
     @test count(b -> b isa Checkbox, first(_VIEW._view_figure(m)).content) == 1 + 2
     @test count(b -> b isa Checkbox, first(_VIEW._view_figure(create_domain([1.0, 1.0, 1.0],
                                                                  [0.1, 0.1, 0.1]))).content) == 2
+
+    # and a menu of all objects by name, to show or hide each one
+    fig, st = _VIEW._view_figure(m)
+    menu = st.object_menu
+    name = list_objects(m)[3].name
+    @test menu isa Menu && length(menu.options[]) == 16
+    @test menu.options[][3] == ("$name  (Sphere, 3)", 3) && menu.selection[] === nothing
+    menu.i_selected[] = 3                                               # picked: hidden
+    @test !st.shown[3][] && all(id -> st.shown[id][], setdiff(1:16, 3))
+    @test st.info[] == "hidden: $name (obj_id 3)"
+    @test menu.i_selected[] == 0                                        # back to the prompt
+    menu.is_open[] = true                                               # opened: up to date
+    @test menu.options[][3] == ("$name  (Sphere, 3)  — hidden", 3)
+    @test count(o -> endswith(o[1], "hidden"), menu.options[]) == 1
+    menu.is_open[] = false
+    menu.i_selected[] = 3                                               # picked again: shown
+    @test st.shown[3][] && st.info[] == "shown: $name (obj_id 3)"
+    # hidden by a click, shown from the menu
+    _VIEW._hide_object!(st.shown, list_objects(m).entries, st.info, 7)
+    menu.is_open[] = true
+    @test endswith(menu.options[][7][1], "— hidden")
+    menu.i_selected[] = 7
+    @test st.shown[7][]
+    # with a checkbox per object there is no menu
+    @test _VIEW._view_figure(_view_domain())[2].object_menu === nothing
 end
 
 @testset "view_domain: point charges" begin
@@ -283,7 +318,7 @@ end
     # the node that receives the charge
     @test all(_VIEW._charge_node_point(d, list_objects(d)[2].object) .≈ (0.2, 0.7, 0.4))
 
-    # objects view: the dot at the given position; voxel view: on that node
+    # defined view: the dot at the given position; voxel view: on that node
     fig, st = _VIEW._view_figure(d)
     dots = [p for (p, i) in st.plot_ids if i == 2]
     @test length(dots) == 2
@@ -330,6 +365,25 @@ end
     fig, st = _VIEW._view_figure(d)
     @test any(b -> b isa Label && b.text[] == "Currents", fig.content)  # the panel's current options
     @test length([p for (p, i) in st.plot_ids if i == 1]) == 3          # line, edges, arrows
+
+    # the edges from the walk of the polyline, without a vector of the whole grid (24 MiB)
+    big = create_domain([1.0, 1.0, 1.0], fill(0.01, 3))
+    Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+        create_polyline_source!(big, [(0.1, 0.2, 0.5), (0.9, 0.7, 0.5)]; name = "wire")
+    end
+    w = only(list_objects(big)).object
+    segs, _, _ = _VIEW._loop_edges(big, w)
+    @test length(segs) == 2 * count(!iszero, get_source(big, "wire"))
+    @test @allocated(_VIEW._loop_edges(big, w)) < 2^20
+    # and of the loops, from their edges alone too
+    create_circular_loop_source!(big, 0.5, 0.5, 0.5, 0.3, DirX(); name = "coil")
+    create_rectangular_loop_source!(big, 0.2, 0.2, 0.4, 0.5, 0.3, DirZ(); name = "frame")
+    for name in ("coil", "frame")
+        loop = only(e for e in list_objects(big) if e.name == name).object
+        segs, _, _ = _VIEW._loop_edges(big, loop)
+        @test length(segs) == 2 * count(!iszero, get_source(big, name))
+        @test @allocated(_VIEW._loop_edges(big, loop)) < 2^20
+    end
 end
 
 # --- The field on the plane (ext/ViewField.jl) ---------------------------------
@@ -621,11 +675,11 @@ end
     d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
     create_brick!(d, 0.2, 0.4, 0.2, 0.6, 0.2, 0.6; μ_r = 1000.0, name = "core")
     create_brick!(d, 0.3, 0.4, 0.3, 0.4, 0.2, 0.4; color = "background", name = "window")
-    @test !_VIEW._is_background(d, list_objects(d)[1].object)
-    @test _VIEW._is_background(d, list_objects(d)[2].object)
+    @test !_VIEW._is_background(list_objects(d)[1].object)
+    @test _VIEW._is_background(list_objects(d)[2].object)
     fig, st = _VIEW._view_figure(d)
     plots(id) = [p for (p, i) in st.plot_ids if i == id]
-    # objects view: the window transparent over the full core
+    # defined view: the window transparent over the full core
     @test only(p for p in plots(2) if p.transparency[]) !== nothing
     @test Makie.to_color(only(p for p in plots(2) if p.transparency[]).color[]).alpha ≈ _VIEW._BACKGROUND_ALPHA
     @test !any(p -> p.transparency[], plots(1))
@@ -649,7 +703,7 @@ end
     create_sphere!(w, 0.5, 0.5, 0.5, 0.2)                              # vacuum, not marked
     create_sphere!(w, 0.5, 0.5, 0.5, 0.15; ε_r = 2.0)                  # background values, not marked
     create_sphere!(w, 0.5, 0.5, 0.5, 0.1; color = "Background")        # marked, any case
-    @test [_VIEW._is_background(w, e.object) for e in list_objects(w)] == [false, false, false, true]
+    @test [_VIEW._is_background(e.object) for e in list_objects(w)] == [false, false, false, true]
     m = list_objects(w)[4].object.material
     @test (m.σ, m.ε_r, m.μ_r, m.color) == (0.0, 2.0, 1.0, "background")
     @test w.material[5, 5, 5, :] == [0.0, 2.0, 1.0]                     # the centre: background again
@@ -658,8 +712,8 @@ end
     @test_logs (:warn, r"ignored") create_sphere!(w, 0.2, 0.2, 0.2, 0.1; σ = 1.0, color = "background")
     @test list_objects(w)[5].object.material.σ == 0.0
     # sources are never cut-outs
-    create_circular_loop_source!(w, 0.1, 0.5, 0.5, 0.5, DirZ())
-    @test !_VIEW._is_background(w, list_objects(w)[6].object)
+    create_circular_loop_source!(w, 0.5, 0.5, 0.5, 0.1, DirZ())
+    @test !_VIEW._is_background(list_objects(w)[6].object)
 end
 
 @testset "view_domain: the combined view" begin
@@ -695,17 +749,19 @@ end
     create_brick!(d, 0.1, 0.05, 0.1, 0.2, 0.1, 0.2; μ_r = 1000.0, name = "core")
     create_sphere!(d, 0.2, 0.1, 0.2, 0.05; color = "background", name = "hole")
     create_cylinder!(d, 0.2, 0.1, 0.25, 0.02, 0.1, DirZ(); σ = 1.0, name = "rod")
-    create_circular_loop_source!(d, 0.05, 0.2, 0.1, 0.1, DirZ(); name = "coil")
-    fields = _VIEW._combined_fields(d, g)
+    create_circular_loop_source!(d, 0.2, 0.1, 0.1, 0.05, DirZ(); name = "coil")
+    groups = _VIEW._combined_groups(d, g)
+    @test groups == [[1], [3]]                                         # no cut-out; different materials
+    fields = _VIEW._combined_fields(d, g; groups)
     @test sort(collect(keys(fields))) == [1, 3]                        # no cut-out, no source
-    meshes = _VIEW._combined_meshes(fields, g)
+    meshes = _VIEW._combined_meshes(fields, groups, g)
     core, rod = meshes[1].position, meshes[3].position
     @test !any(p -> hypot((p .- (0.2, 0.1, 0.2))...) < 0.05 - 2h, core)   # nothing in the hole
     @test any(p -> abs(hypot((p .- (0.2, 0.1, 0.2))...) - 0.05) < 2h, core) # but its wall
     @test !any(p -> hypot(p[1] - 0.2, p[2] - 0.1) < 0.02 - 2h && 0.25 + 2h < p[3] < 0.3 - 2h, core)
     @test all(extrema(p[3] for p in rod) .≈ (0.25, 0.35))               # the rod whole, through the core
     # with a cut along z at 0.3 m: closed at the cut, nothing beyond
-    cut = _VIEW._combined_meshes(fields, g; cut = (3, 0.3))
+    cut = _VIEW._combined_meshes(fields, groups, g; cut = (3, 0.3))
     @test maximum(p[3] for p in cut[1].position) <= 0.3 + 1e-6
     @test maximum(p[3] for p in cut[3].position) ≈ 0.3 atol = 1e-6
 
@@ -722,6 +778,86 @@ end
     full = length(Makie.GeometryBasics.faces(st.shapes[1][]))
     [b for b in fig.content if b isa Checkbox][end-3].checked[] = true    # cut along z at 0.2 m
     @test 0 < length(Makie.GeometryBasics.faces(st.shapes[1][])) < full
+end
+
+@testset "view_domain: touching solids of one material are one surface" begin
+    # a wire of three pieces, as in a model: a lead, a round elbow and a riser, of one
+    # material and colour; then one of another material, one apart, and a cut-out
+    d = create_domain([0.4, 0.4, 0.4], [0.02, 0.02, 0.02])
+    wire = (σ = 5.8e7, color = "copper")
+    create_cylinder!(d, 0.1, 0.2, 0.2, 0.03, 0.2, DirX(); name = "lead", wire...)
+    create_sphere!(d, 0.1, 0.2, 0.2, 0.03; name = "elbow", wire...)
+    create_cylinder!(d, 0.1, 0.2, 0.2, 0.03, 0.15, DirZ(); name = "riser", wire...)
+    create_cylinder!(d, 0.3, 0.2, 0.05, 0.03, 0.1, DirZ(); σ = 1.0, color = "copper", name = "other")
+    create_brick!(d, 0.25, 0.05, 0.05, 0.1, 0.1, 0.1; name = "apart", wire...)
+    create_sphere!(d, 0.2, 0.2, 0.2, 0.01; color = "background", name = "hole")
+    g = _VIEW._combined_grid(d)
+    h = _VIEW._step(g[1])
+    groups = _VIEW._combined_groups(d, g)
+    @test groups == [[1, 2, 3], [4], [5]]
+    fields = _VIEW._combined_fields(d, g; groups)
+    objs = [e.object for e in list_objects(d)]
+    dist(o, p) = FITToolbox._signed_distance(o, Float64.(Tuple(p)) .- FITToolbox._reference(o))
+    # one closed surface, without seams between the pieces: every edge of the triangles
+    # belongs to an even number of them. By position, so across the pieces; where a wall
+    # lies on a sampling plane, vertices of neighbouring cubes coincide, so an edge can
+    # count 4 or 6 times, but an open seam would count once.
+    function closed(meshes, ids)
+        count = Dict{NTuple{2,NTuple{3,Float32}},Int}()
+        for id in ids, f in Makie.GeometryBasics.faces(meshes[id])
+            p = meshes[id].position
+            for (a, b) in ((1, 2), (2, 3), (3, 1))
+                e = minmax(Tuple(p[f[a]]), Tuple(p[f[b]]))
+                count[e] = get(count, e, 0) + 1
+            end
+        end
+        return all(iseven, values(count))
+    end
+    for cut in (nothing, (1, 0.2), (3, 0.3))                            # and closed at a cut
+        meshes = _VIEW._combined_meshes(fields, groups, g; cut)
+        @test sort(collect(keys(meshes))) == (cut == (1, 0.2) ? [1, 2, 3] : [1, 2, 3, 4, 5])
+        @test closed(meshes, 1:3)
+        # no surface inside the wire, where the pieces overlap: no vertex deep in a piece,
+        # except on the wall of the cut-out and on the cut face
+        beyond(p) = cut !== nothing && p[cut[1]] > cut[2] - 2h
+        @test !any(p -> !beyond(p) && dist(objs[6], p) > 2h && any(o -> dist(o, p) < -2h, objs[1:3]),
+                   (p for id in 1:3 for p in meshes[id].position))
+    end
+    # each piece has the faces on its own surface, the hole is cut out of the lead
+    meshes = _VIEW._combined_meshes(fields, groups, g)
+    for id in 1:3
+        pts = meshes[id].position
+        @test count(p -> abs(dist(objs[id], p)) < 2h, pts) > 0.9 * length(pts)
+    end
+    @test any(p -> abs(dist(objs[6], p)) < 2h, meshes[1].position)
+    # per piece in the view: each its own plot, shown and hidden on its own
+    fig, st = _VIEW._view_figure(d)
+    st.combined_mode[] = true
+    @test all(id -> st.shapes[id][] !== _VIEW._EMPTY_VOXELS, 1:5)
+    visible(id) = count(p -> p.visible[], [p for (p, i) in st.plot_ids if i == id])
+    @test visible(2) == 1                                               # its part of the surface
+    st.shown[2][] = false
+    @test visible(2) == 0 && visible(1) == 1 && visible(3) == 1         # the others stay
+end
+
+@testset "view_domain: the combined view samples thin solids finely enough" begin
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    @test _VIEW._combined_cells(d) == 240                               # no solids
+    quiet(() -> create_cylinder!(d, 0.5, 0.5, 0.5, 0.2, 0.003, DirZ(); name = "plate"))
+    @test _VIEW._combined_cells(d) == 1000                              # 3 mm thick: 1 mm steps
+    @test length(_VIEW._combined_grid(d)[1]) == 1001
+    quiet(() -> create_sphere!(d, 0.1, 0.1, 0.1, 0.0002; color = "background"))
+    @test _VIEW._combined_cells(d) == 1000                              # a cut-out does not count
+    # the samples around the solids stay within the budget
+    create_brick!(d, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5; name = "block")
+    volume = 0.4 * 0.4 * 0.003 + 0.5^3
+    @test _VIEW._combined_cells(d) == round(Int, 1 / cbrt(volume / _VIEW._COMBINED_BUDGET))
+    @test _VIEW._combined_cells(d) < 1000
+    # never coarser than 240 cells along the longest side
+    t = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_brick!(t, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+    @test _VIEW._combined_cells(t) == 240
 end
 
 @testset "view_domain fields: arrows" begin
@@ -835,4 +971,48 @@ end
     @test enabled(f.log_box)                                              # |E|
     f.field_menu.i_selected[] = 2                                         # Φ from -0.5 to 0.5 V
     @test !enabled(f.log_box) && f.log_label[] == "log scale (n/a)"
+end
+
+@testset "view_domain fields: invalid calls" begin
+    d = _field_domain()
+    a = zeros(d.Np)
+    # every field needs its own name: the menu could not tell them apart
+    @test_throws "\"E\" twice" _VIEW._field_specs(d, ("E" => (a, PrimalNode()), "E" => (a, PrimalNode())))
+    @test_throws ArgumentError _VIEW._view_figure(d, "E" => (a, PrimalNode()), "E" => (a, DualNode()))
+    # refine is checked with and without fields
+    @test_throws "refine must be at least 1" _VIEW._view_figure(d; refine = 0)
+    @test_throws "refine must be at least 1" _VIEW._view_figure(d, "E" => (a, PrimalNode()); refine = 0)
+end
+
+@testset "view_domain: a cut-out in a non-vacuum background" begin
+    # the hole in the combined view does not depend on the background values
+    w = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1]; ε_r = 2.0)
+    create_brick!(w, 0.2, 0.2, 0.2, 0.6, 0.6, 0.6; μ_r = 100.0, name = "core")
+    create_sphere!(w, 0.5, 0.5, 0.5, 0.2; color = "background", name = "hole")
+    g = _VIEW._combined_grid(w)
+    groups = _VIEW._combined_groups(w, g)
+    fields = _VIEW._combined_fields(w, g; groups)
+    @test collect(keys(fields)) == [1]                                   # the cut-out has no surface
+    pts = _VIEW._combined_meshes(fields, groups, g)[1].position
+    h = 1 / 240
+    @test !any(p -> hypot((p .- 0.5f0)...) < 0.2 - 2h, pts)             # nothing inside the hole
+    @test any(p -> abs(hypot((p .- 0.5f0)...) - 0.2) < 2h, pts)         # its wall
+    @test w.material[5, 5, 5, :] == [0.0, 2.0, 1.0]                      # the material: background again
+end
+
+@testset "view_domain fields: a domain one cell thick" begin
+    # quasi two-dimensional: one cell along w, where the dual quantities have a single
+    # position and are constant; the field view works as on any grid
+    d = create_domain([1.0, 0.8, 0.1], [0.1, 0.1, 0.1])
+    @test d.Nw == 2
+    E0 = (1.0, -2.0, 0.5)
+    fig, st = _VIEW._view_figure(d, "E" => (_uniform_edges(d, E0), PrimalEdge()),
+                                 "Φ" => (_node_field(d, (x, y, z) -> x - y), PrimalNode()))
+    f = st.field
+    f.on.checked[] = true                                                 # the plane z = 0
+    @test length(f.values[]) == 11 * 9 && all(≈(hypot(E0...)), f.values[])
+    f.quantity_menu.i_selected[] = 4                                      # z
+    @test all(≈(0.5), f.values[])
+    f.field_menu.i_selected[] = 2
+    @test f.signed[] && all(f.colorrange[] .≈ (-1.0, 1.0))               # Φ = x - y: -0.8 … 1 V, about zero
 end

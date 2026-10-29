@@ -24,10 +24,46 @@ interactive 3D view of a model, as modelled and as the grid sees it.
   `create_circular_loop_source!`, which records the loop in the domain and returns its
   `obj_id`. The source vector comes from `get_source(domain, obj_id)` or
   `get_source(domain, name)`, and the current is set with the new keyword `current`
-  (default 1 A) instead of by scaling the returned vector. The old name still returns
-  the vector, but is deprecated.
+  (default 1 A) instead of by scaling the returned vector. Its arguments follow the
+  other create functions, the centre first and then the radius:
+  `create_circular_loop_source!(domain, u, v, w, radius, normal)`. The old name still
+  returns the vector and takes the radius first, as before, but is deprecated.
 - Deprecation warnings appear only when Julia runs with `--depwarn=yes`, as in
-  `Pkg.test`; by default the old names work silently.
+  `Pkg.test`; by default the old names work silently. This now holds for every old
+  name: the one-argument `get_curl(config)` and `get_gradient(config)` are deprecated in
+  favour of `get_curl(config, Primal())` and `get_gradient(config, Primal())` instead
+  of warning on every call.
+- `create_brick!` clips a brick that reaches beyond the domain, with a warning, as
+  `create_sphere!` and the other solids do, instead of throwing. It still throws if its
+  corner lies outside the domain, if a length is not positive, or if less than about
+  half a cell of it lies in the domain along an axis.
+- **Breaking:** a face of a brick exactly halfway between two nodes snaps to the lower
+  node, as the corners of the loop sources and the points of polylines and charges do.
+  It used to snap to the upper one, so a rectangular loop around a brick given by the
+  same coordinates could sit a cell off.
+- `get_gradient(config, Dual())` and `get_divergence(config, Dual())` return a
+  `SparseMatrixCSC`, as `get_curl(config, Dual())` does, instead of a lazy adjoint.
+- The keywords `name` and `color` take any string, e.g. a `SubString`.
+- The closure checks of the sources are errors instead of warnings: every loop is
+  closed and every polyline connected by construction, so a failed check is a bug in
+  the package. They compute `S̃J` from the edges of the source alone, without `S̃` or a
+  vector of the whole grid.
+- Wire sources (circular and rectangular loops, polylines) are kept as the list of edges
+  they occupy, whose memory grows with the length of the wire, not with the grid:
+  creating one, `get_source_path`, `get_source_length`, the checks of
+  `change_resolution` and `load_domain`, and `view_domain` drawing its grid edges build
+  no vector of the whole grid, and `get_source` builds only its result. A circular loop
+  visits only the cells around the circle, no longer its whole plane. On a grid of
+  2.9 M nodes a wire of 15 edges took about 197 MiB in each of these calls and a circle
+  of 116 edges 88–153 MiB, now 10–20 KiB each, and `get_source` its 66 MiB result; 100
+  circles, e.g. the turns of a coil, took 15 GiB to create, now about 1 MiB. Creating a
+  point charge builds no such vector either.
+- Spheres, cylinders, tori and helices fill the material by scanning only the cells
+  around them instead of the whole grid, with the same result cell for cell: creating
+  them, and replaying them in `change_resolution`, `load_domain` and the voxel view of
+  `view_domain`, now costs in proportion to their size on the grid. On 8 M nodes, a
+  model of five solids took 4.3 s to create, now 0.9 s; opening the voxel view 5.1 s,
+  now 2.4 s.
 - `create_domain(domain_size, resolution)` throws an `ArgumentError` when either does
   not have three values, instead of warning and returning `NaN`.
 - `interpolate` no longer warns for points within half a cell of the boundary. There, a
@@ -50,7 +86,8 @@ interactive 3D view of a model, as modelled and as the grid sees it.
   - `change_resolution(domain, resolution)` and
     `change_resolution(domain, Edges_U, Edges_V, Edges_W)` return a new domain with the
     same extent and background material and the whole history replayed on the new grid,
-    equidistant or not. The original domain is not changed.
+    equidistant or not. The original domain is not changed. A resolution must divide
+    the extent; otherwise an `ArgumentError` names the direction.
   - `get_source(domain, obj_id)` and `get_source(domain, name)` return the source vector
     of one source, discretized on the current grid.
 - **Names:** every create function takes a keyword `name`, which must be unique among
@@ -81,18 +118,32 @@ interactive 3D view of a model, as modelled and as the grid sees it.
   length_2, normal)` (the lengths also as a tuple), a corner and two sides as for
   `create_brick!`. The sides run along grid lines, so there is no staircase: the loop is
   exactly the snapped rectangle, closed, with the moment exactly current × area along the
-  normal. Both loop types share the abstract type `AbstractLoopSource`.
+  normal. Both loop types work alike in `get_source`, `get_source_length` and
+  `view_domain`.
 - **Polyline sources:** `create_polyline_source!(domain, points; closed = false)`, a wire
   along straight pieces between the given points. Each piece becomes a path of primal
   edges through the nodes nearest to the line, connected by construction (one edge per
   step, within half a cell diagonal of the line), so a straight wire is two points. The
   wire is divergence free except at the ends of an open polyline, where the current
   enters and leaves the grid; an info message names them, and
-  `get_source_ends(domain, name)` returns them as node indices. Loops and polylines share
-  the abstract type `AbstractEdgeSource`.
+  `get_source_ends(domain, name)` returns them as positions and node indices. A polyline
+  whose edges cancel (there and back along one line) is rejected.
+  `get_source_path(domain, name)` returns the edges in their order along the wire, with
+  the sign of each (along or against its axis), its length, the nodes passed and the
+  piece of the polyline it belongs to, e.g. to build a transmission-line model of the
+  wire on the grid. Steps back along the edge just walked, which a sharp corner produces
+  and which cancel in the source vector, are left out, so the path holds exactly the
+  edges of `get_source`; a polyline that runs along an edge twice has no single order and
+  is rejected. Its `planned_lengths` give the length of the planned wire each edge stands
+  for: a staircase is longer than the line it follows, √2 at 45° in a plane, so per-length
+  quantities of the real wire put on the edges with these lengths keep its electrical
+  length, piece by piece, also for a wire that is partly straight and partly diagonal.
+  Each piece's length is shared among its own edges. Where parts of the wire lie within a
+  cell of each other, their edges cancel and their length goes with them, instead of
+  stretching the rest of the wire; a warning says so when more than 5 % is lost.
 - **Source lengths:** `get_source_length(domain, name)` returns the length of a polyline
-  source, the two sides of a rectangular loop, or the circumference of a circular loop,
-  as planned and as on the grid (the edges the source occupies). A staircase is the sum
+  source, rectangular loop (its sides as well) or circular loop, as planned and as on
+  the grid (the edges the source occupies). A staircase is the sum
   of the line's extents along the axes, e.g. `8R` for a circle of radius `R`, on any
   grid.
 - **Point charges:** `create_electric_charge!(domain, u, v, w; charge)` records a point
@@ -105,8 +156,15 @@ interactive 3D view of a model, as modelled and as the grid sees it.
     smooth surfaces (later objects win, cut-outs subtracted), and the voxels, i.e. the
     cells each object occupies on the grid, drawn as surface meshes on the real,
     possibly graded, cell boundaries.
+  - In the combined view, solids of the same colour and material that touch, e.g. the
+    leads, elbows and risers of a wire, are one surface, without the creases and
+    overlapping walls of separate surfaces where they meet. The sampling resolves the
+    thinnest solid with three samples, e.g. 1 mm for 3 mm capacitor plates, within a
+    limit of 4 M samples around the solids, and 240 along the longest side at least.
   - A checkbox per object, in its colour (per type above 15 objects), hides or shows it;
     so does a click on the object. "Show all" and "Reset view" restore the defaults.
+    With a checkbox per type, a menu of all objects by name, type and obj_id, with a
+    search field, shows or hides each one and marks the hidden ones.
   - A cut along x, y or z hides everything beyond a grid plane; in the voxel view the
     cut face is filled with the cells. The grid lines in the cut plane can be shown.
   - Loop and polyline sources can be drawn on the grid edges they occupy, with arrows
@@ -133,23 +191,41 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 - **Save and load:** `save_domain(path, domain)` writes the grid, the background
   material and the full history to a human-readable TOML file; `load_domain(path)`
   rebuilds the domain from it, with `undo!` still working. Files are checked on loading:
-  ids and names must be unique and every removal must refer to an existing object.
-  Values written directly into `domain.material` are not saved, and `save_domain` warns
-  if there are any.
+  ids and names must be unique and not empty, every removal must refer to an existing
+  object, and a value that is missing or of the wrong kind (a position without three
+  coordinates, an unknown axis or colour, a cell width that is not positive) is an
+  `ArgumentError` that names the file and the place in it. Values written directly into
+  `domain.material` are not saved, and `save_domain` warns if there are any.
 - **Complex currents:** `current` may be complex, e.g. a phasor in the frequency domain.
   `get_source` then returns a `ComplexF64` vector; real currents keep `Float64`.
+- `interpolate(domain, PrimalVolume(), …)` and `interpolate(domain, DualVolume(), …)`:
+  the density of a quantity integrated over the cells, e.g. a charge `q` from
+  `get_source` in C/m³. Both entities were exported, but `interpolate` had no method
+  for them.
 - `create_circular_loop_source!` throws an `ArgumentError` for a radius that is not
   positive, as `create_sphere!` does.
+- `get_cell_count(domain)`: the number of cells of the grid. `view_domain` shows it in its
+  panel, with the cells along each axis.
 - New dependency: the `TOML` standard library.
 - Test files:
   - `test/history.jl`: recording, ids, names, removal, undo, change of resolution,
     `list_objects` and `get_source`.
-  - `test/saveload.jl`: round trips, hand-written files and invalid or inconsistent
-    files.
+  - `test/saveload.jl`: round trips, hand-written files, and invalid or inconsistent
+    files and files with values missing or of the wrong kind.
   - `test/objects.jl`: material filled by `create_brick!`, `create_sphere!`,
-    `create_cylinder!`, `create_torus!` and `create_helix!`.
-  - `test/sources.jl`: complex currents, the three normals of a loop and the deprecated
+    `create_cylinder!`, `create_torus!` and `create_helix!`; bricks clipped at the
+    boundary.
+  - `test/sources.jl`: circular and rectangular loops (closure, orientation, the three
+    normals, the limits of the domain on either side), polylines, point charges, their
+    ends, paths and lengths, complex currents, and the deprecated
     `create_circular_loop_source`.
+  - `test/indexing.jl`, `test/interpolation_edges_facets.jl`: the outermost half cells,
+    volume quantities, domains one cell thick, and the messages for indices without an
+    entity.
+  - `test/runtests.jl`: the deprecated names, a docstring for every exported name, the
+    boundary indices and projections for all components, and `plot_nodal_values` along
+    every axis.
+  - The CI runs the tests with two threads, so that the threaded loops run in parallel.
   - `test/viewer.jl`: `view_domain` built with CairoMakie and every control operated:
     colours, groups, cut, voxel labels and meshes, loop edges, and the field plane:
     checks of the fields, sampling, complex modes, colour ranges, time series and the
@@ -158,6 +234,30 @@ interactive 3D view of a model, as modelled and as the grid sees it.
 
 ### Fixed
 
+- A circular loop on a grid too coarse to resolve it on one side, where its crossing
+  edges fall on the line through its centre, was not closed: the direction of an edge
+  was taken from its position relative to the centre, which is ambiguous there. It now
+  follows from the side of the edge the inside is on, which is the same for resolved
+  loops and closes the loop on any grid.
+- A circular loop reaching into the first cells of the domain, within half a cell of
+  `nodes[1]`, was not closed either: the edges on the first node line were never
+  marked, and only a warning said so. Every loop the checks accept is now closed.
+- `change_resolution` and `load_domain` check every source on the grid they produce. A
+  loop that no longer fits within `nodes[1] … nodes[end-2]`, or a polyline whose points
+  all snap to one node, used to pass unnoticed and fail later in `get_source` or
+  `view_domain`, which then could not show the model at all.
+- `create_domain` throws an `ArgumentError` for a cell width, size or resolution that is
+  not positive and finite, or an axis without a cell. Zero, negative or NaN widths used
+  to give nodes out of order, and with them silently wrong cells.
+- `create_circular_loop_source!` and `create_rectangular_loop_source!` throw an
+  `ArgumentError` on a grid with fewer than three nodes in a direction, where the range
+  `nodes[1] … nodes[end-2]` is empty, instead of a `BoundsError`.
+- `interpolate` of edge, facet and dual-node quantities, and with it the field view of
+  `view_domain`, failed on a domain one cell thick along an axis ("Need at least two
+  dual nodes"). The quantities centred in that cell are now constant along it.
+- `get_position_of_index` threw a `BoundsError` whose message read "attempt to access
+  35-codeunit String". It now names the valid index range of the entity, also for dead
+  entities such as a u-edge leaving the last node plane in u.
 - Objects, charges and interpolation points exactly on the far boundary of the domain
   were rejected, or interpolated as outside, when the last node fell below the requested
   extent by rounding (ten cells of 0.1 m end at 0.9999999999999999 m). Positions are now
@@ -167,14 +267,27 @@ interactive 3D view of a model, as modelled and as the grid sees it.
   heatmap.
 - `interpolate(domain, DualNode(), …)` returns `NaN` with a warning outside the domain,
   like every other quantity. It used to extrapolate silently from the outermost cell.
+- `interpolate` throws a `DimensionMismatch` if the data does not hold one value per
+  entity, `Np` for nodes and `3Np` for edges and facets. A vector of the other kind used
+  to be read silently, e.g. the u-components of an edge vector as nodal values, or to
+  fail with an index error deep inside.
 - The docstrings of `get_index_entity`, `get_reluctivity` and the dual-facet averaging
   were separated from their functions by a blank line and therefore not attached to
   them; they now show up in the help.
 
 ### Documentation
 
+- Docstrings for `create_domain`, `FITDomain`, `create_brick!`, `create_sphere!`,
+  `interpolate`, `get_curl`, `get_gradient`, `get_divergence`, `get_permittivity`,
+  `get_conductivity`, `get_vacuum_cfl_time` (which is exactly the stability limit on an
+  equidistant grid, so a step slightly below it is needed), `get_position_of_index`,
+  the boundary functions, and the exported types: every exported name now has one.
+- `CITATION.cff`: the ORCIDs are fields of their own, no longer part of the
+  affiliation, and the release date, not a valid date before, is left for the tag.
 - The coil, eddy-current and SPFD dosimetry notebooks use `create_circular_loop_source!`
-  with `current` and `get_source`.
+  with `current` and `get_source`. The eddy-current notebook names `create_brick!`
+  where it still said `create_cube!`, and `Domain_and_History.ipynb` re-creates its
+  sphere where it was, instead of on the copper shield.
 - New notebook `examples/snippets/Domain_and_History.ipynb`.
 - New script `examples/snippets/View_Domain.jl`: a model with every object type in
   `view_domain`. The examples environment includes GLMakie for it.

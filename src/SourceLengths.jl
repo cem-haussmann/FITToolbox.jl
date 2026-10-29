@@ -16,9 +16,10 @@ vector occupies, each counted as often as the current runs along it:
   the edge path. Where the path runs back along an edge it came along, e.g. at a
   sharp corner, the two currents cancel and that edge does not count.
 - rectangular loop (`create_rectangular_loop_source!`): `planned` and `actual` are
-  the two side lengths, `(length_1, length_2)` as given to the create function, i.e.
-  along the two in-plane axes in ascending order; on the grid the corners snap to
-  nodes.
+  the perimeter, and a third field `sides = (planned = (l₁, l₂), actual = (a₁, a₂))`
+  holds the two side lengths, `(length_1, length_2)` as given to the create function,
+  i.e. along the two in-plane axes in ascending order; on the grid the corners snap to
+  nodes, so a side can change while the other does not.
 - circular loop (`create_circular_loop_source!`): `planned` is the circumference
   `2πR`, `actual` the length of the staircase of edges.
 
@@ -34,7 +35,7 @@ Throws an `ArgumentError` if no such object exists or it is not one of these sou
 # Example
 
 ```julia
-create_circular_loop_source!(domain, 0.1, 0.5, 0.5, 0.5, DirZ(); name = "coil")
+create_circular_loop_source!(domain, 0.5, 0.5, 0.5, 0.1, DirZ(); name = "coil")
 get_source_length(domain, "coil")      # (planned = 0.628…, actual = 0.8 or close to it)
 ```
 """
@@ -47,20 +48,35 @@ function get_source_length(domain::FITDomain, obj_id::Int)
     src isa Union{PolylineSource,RectangularLoop,CircularLoop} ||
         throw(ArgumentError("object $obj_id \"$(e.name)\" is a $(nameof(typeof(src))), not a \
                              polyline source, rectangular loop or circular loop"))
-    lengths = _edge_lengths_along(domain, _unit_source(domain, src))
-    return _source_length(src, lengths)
+    return _source_length(src, _edge_lengths_along(domain, _occupied_edges(domain, src)))
 end
 
-# The length of the edges a unit source occupies, along each axis: Σ |j_e| L_e
-function _edge_lengths_along(domain::FITDomain, J)
+# The edges a source occupies with its current per unit, edge => j_e in ascending order of
+# the edges, without a vector of the whole grid. get_source_length and view_domain take
+# them from here.
+_occupied_edges(domain::FITDomain, src::AbstractEdgeSource) =
+    sort!(collect(_unit_edges(domain, src)); by = first)
+
+# The axis (1, 2 or 3) and the start node (i, j, k) of edge p of the edge layout
+function _edge_axis_ijk(domain::FITDomain, p::Int)
     Nu, Nv, Np = domain.Nu, domain.Nv, domain.Np
-    edges = (domain.edges_u, domain.edges_v, domain.edges_w)
+    q = (p - 1) % Np                                  # 0-based node index in the block
+    return (p - 1) ÷ Np + 1, (q % Nu + 1, (q ÷ Nu) % Nv + 1, q ÷ (Nu * Nv) + 1)
+end
+
+# The length of edge p, in m
+function _edge_length(domain::FITDomain, p::Int)
+    axis, ijk = _edge_axis_ijk(domain, p)
+    return (domain.edges_u, domain.edges_v, domain.edges_w)[axis][ijk[axis]]
+end
+
+# The length of the edges a unit source occupies, along each axis: Σ |j_e| L_e over the
+# pairs edge => j_e, in ascending order of the edges so that the sums do not depend on
+# where the pairs come from
+function _edge_lengths_along(domain::FITDomain, occupied)
     total = zeros(3)
-    for p in findall(!iszero, J)
-        axis = (p - 1) ÷ Np + 1
-        q = (p - 1) % Np                              # 0-based node index in the block
-        ijk = (q % Nu + 1, (q ÷ Nu) % Nv + 1, q ÷ (Nu * Nv) + 1)
-        total[axis] += abs(J[p]) * edges[axis][ijk[axis]]
+    for (p, j) in occupied
+        total[first(_edge_axis_ijk(domain, p))] += abs(j) * _edge_length(domain, p)
     end
     return total
 end
@@ -74,7 +90,9 @@ end
 # each side twice: once there, once back
 function _source_length(r::RectangularLoop, lengths)
     p, q = _inplane_axes(r.normal)
-    return (planned = r.lengths, actual = (lengths[p] / 2, lengths[q] / 2))
+    sides = (lengths[p] / 2, lengths[q] / 2)
+    return (planned = 2 * sum(r.lengths), actual = 2 * sum(sides),
+            sides = (planned = r.lengths, actual = sides))
 end
 
 _source_length(c::CircularLoop, lengths) = (planned = 2π * c.radius, actual = sum(lengths))

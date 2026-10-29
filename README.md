@@ -61,7 +61,9 @@ pkg> add https://github.com/cem-haussmann/FITToolbox.jl.git
 Requires Julia 1.10 (the current long-term-support release) or later.
 
 The test suite covers the operator identities, the material matrix values on both
-uniform and graded grids, the boundary projections and the interpolation:
+uniform and graded grids, the boundary projections and the interpolation, the objects
+and sources on the grid, the history with saving and loading, and the viewer, whose
+figure and controls are built with CairoMakie:
 
 ```julia
 pkg> test FITToolbox
@@ -119,7 +121,7 @@ They share the environment in `examples/`; the first cell of each notebook sets 
 | Example | Topic |
 |---|---|
 | `Domain_and_History.ipynb` | Objects with names and colours, the object list, removing and undoing, real and complex sources, saving a model to a file and loading it again. |
-| `View_Domain.jl` | A model with every object type in the interactive 3D viewer `view_domain`: the objects as modelled and as the grid sees them, cuts, and loop sources on their grid edges. Opens a GLMakie window: `julia examples/snippets/View_Domain.jl`. |
+| `View_Domain.jl` | A model with every object type in the interactive 3D viewer `view_domain`: the objects as defined, combined into one geometry, and as the grid sees them (voxels), cuts, and loop sources on their grid edges. Opens a GLMakie window: `julia examples/snippets/View_Domain.jl`. |
 | `View_Field.jl` | A dielectric sphere between two plates and its potential, E and D in the field view of `view_domain`: colours, arrows, cuts. Opens a GLMakie window: `julia examples/snippets/View_Field.jl`. |
 | `View_Magnetostatics.jl` | An iron C-core electromagnet with an air gap and a helical coil: B, H and A in the field view, the flux round the core, fringing and leakage. Opens a GLMakie window: `julia examples/snippets/View_Magnetostatics.jl`. |
 

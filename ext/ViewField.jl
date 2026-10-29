@@ -13,6 +13,9 @@ const _COMPLEX_MODES = ["instantaneous", "real part", "imaginary part", "magnitu
 # "name" => (data, entity) or "name" => (snapshots, entity, times) for each field,
 # checked against the domain. A static field is a single snapshot without times.
 function _field_specs(domain, fields)
+    names = [string(first(f)) for f in fields if f isa Pair]
+    allunique(names) ||
+        throw(ArgumentError("every field needs its own name, got \"$(first(n for n in names if count(==(n), names) > 1))\" twice"))
     return map(collect(fields)) do f
         f isa Pair ||
             throw(ArgumentError("a field is given as \"name\" => (data, entity), got $(typeof(f))"))
@@ -94,10 +97,14 @@ function _sample_plane(domain, f, axis::Int, pos, xs, ys, step::Int = 1)
     T = f.complex ? ComplexF64 : Float64
     out = f.vector ? Array{T}(undef, length(xs), length(ys), 3) :
                      Matrix{T}(undef, length(xs), length(ys))
-    for (j, y) in enumerate(ys), (i, x) in enumerate(xs)
-        p = ntuple(d -> d == axis ? Float64(pos) : d == a ? x : y, 3)
-        v = FITToolbox.interpolate(domain, f.entity, data, p...)
-        f.vector ? (out[i, j, :] .= v) : (out[i, j] = v)
+    # a row per thread: a fine plane has a million points and more
+    Threads.@threads for j in eachindex(ys)
+        y = ys[j]
+        for (i, x) in enumerate(xs)
+            p = ntuple(d -> d == axis ? Float64(pos) : d == a ? x : y, 3)
+            v = FITToolbox.interpolate(domain, f.entity, data, p...)
+            f.vector ? (out[i, j, :] .= v) : (out[i, j] = v)
+        end
     end
     return out
 end
@@ -202,7 +209,7 @@ function _plane_mesh(axis::Int, pos, xs, ys)
     pts = [Point3f(ntuple(d -> d == axis ? pos : d == a ? x : y, 3)) for y in ys for x in xs]
     n = length(xs)
     idx(i, j) = i + (j - 1) * n
-    faces = _TriFace[]
+    faces = sizehint!(_TriFace[], 2 * (n - 1) * (length(ys) - 1))
     for j in 1:length(ys)-1, i in 1:n-1
         push!(faces, _TriFace(idx(i, j), idx(i+1, j), idx(i+1, j+1)),
                      _TriFace(idx(i, j), idx(i+1, j+1), idx(i, j+1)))

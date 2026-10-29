@@ -108,6 +108,18 @@ end
     # dead entities: a u-edge starting on the last node, a cell beyond the last node
     @test_throws BoundsError get_position_of_index(d, PrimalEdge(), DirX(), d.Nu, 1, 1)
     @test_throws BoundsError get_position_of_index(d, DualNode(), _ix_idx(d, d.Nu, 1, 1))
+
+    # the message gives the index range of the entity and the index (Nu, Nv, Nw = 5, 4, 6)
+    message(f) = try f(); "" catch e; sprint(showerror, e) end
+    m = message(() -> get_position_of_index(d, PrimalNode(), DirX(), 0, 1, 1))
+    @test occursin("5×4×6", m) && occursin("at index [0, 1, 1]", m)
+    m = message(() -> get_position_of_index(d, PrimalEdge(), DirX(), d.Nu, 1, 1))
+    @test occursin("4×4×6", m) && occursin("at index [5, 1, 1]", m)            # u-edges: 1:Nu-1 in u
+    m = message(() -> get_position_of_index(d, DualNode(), _ix_idx(d, d.Nu, 1, 1)))
+    @test occursin("4×3×5", m) && occursin("at index [5, 1, 1]", m)            # cells: 1:N-1 each
+    m = message(() -> get_position_of_index(d, PrimalEdge(), 3 * d.Np + 1))
+    @test occursin("360-element", m) && occursin("at index [361]", m)
+    @test !occursin("String", m)
 end
 
 end

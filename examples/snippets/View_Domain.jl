@@ -41,7 +41,7 @@ create_sphere!(domain, 0.5, 0.5, 0.55, 0.15; units = "m", ε_r = 4.0, name = "ba
 create_sphere!(domain, 0.5, 0.5, 0.55, 0.08; units = "m", ε_r = 9.0,
                name = "core", color = "red")
 # the loop in the plane z = 0.3 m, between the shield and the ball
-create_circular_loop_source!(domain, 0.1, 0.5, 0.5, 0.3, DirZ(); units = "m",
+create_circular_loop_source!(domain, 0.5, 0.5, 0.3, 0.1, DirZ(); units = "m",
                              current = 1000.0, name = "coil")
 # an aluminium rod standing on the shield next to the ball, z = 0.2 m to 0.8 m:
 # the base face is at (0.2, 0.75, 0.2), the rod extends 0.6 m along +z

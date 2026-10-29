@@ -37,11 +37,11 @@ q = get_source(domain, "proton")
 ```
 """
 function create_electric_charge!(domain::FITDomain, u, v, w;
-                                 charge::Real, units="m", name::String="")
+                                 charge::Real, units="m", name::AbstractString="")
     unitToMeter = check_units(units)
     name = _resolve_name(domain, name)
     pc = PointCharge((u*unitToMeter, v*unitToMeter, w*unitToMeter), charge)
-    _discretize_source(domain, pc)     # throws on invalid input, before anything is recorded
+    _check_source(domain, pc)          # throws on invalid input, before anything is recorded
     return _record_create!(domain, pc; name)
 end
 
@@ -52,6 +52,9 @@ function _charge_node(domain::FITDomain, pc::PointCharge)
         throw(ArgumentError("charge position $(pc.position) m lies outside the domain"))
     return ntuple(d -> _find_index(nodes[d], pc.position[d]), 3)
 end
+
+# checked on its node alone, without the vector of the whole grid
+_check_source(domain::FITDomain, pc::PointCharge) = (_charge_node(domain, pc); nothing)
 
 function _discretize_source(domain::FITDomain, pc::PointCharge)
     i, j, k = _charge_node(domain, pc)

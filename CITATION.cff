@@ -10,13 +10,13 @@ authors:
     email: haussmann@uni-wuppertal.de
     affiliation: >-
       Chair of Electromagnetic Theory, University of Wuppertal
-      orcid: 'https://orcid.org/0000-0002-1685-8760'
+    orcid: 'https://orcid.org/0000-0002-1685-8760'
   - given-names: Markus
     family-names: Clemens
     email: clemens@uni-wuppertal.de
     affiliation: >-
       Chair of Electromagnetic Theory, University of Wuppertal
-      orcid: 'https://orcid.org/0000-0002-1226-7840'
+    orcid: 'https://orcid.org/0000-0002-1226-7840'
 repository-code: 'https://github.com/cem-haussmann/FITToolbox.jl.git'
 abstract: >-
   A Julia implementation of the Finite Integration Technique (FIT)
@@ -32,4 +32,4 @@ keywords:
   - Julia
 license: MIT
 version: 0.3.0
-date-released: '2026-10-xx'
+# date-released: 'YYYY-MM-DD'   (set when 0.3.0 is tagged; 'xx' is not a valid date)

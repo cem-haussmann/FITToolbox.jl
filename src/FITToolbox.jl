@@ -12,13 +12,50 @@ using TOML
 
 abstract type GridTopology end
 
+"""
+    Primal()
+
+Selects the operator on the primal grid, e.g. `get_curl(domain, Primal())` for `C` and
+`get_gradient(domain, Primal())` for `G`.
+"""
 struct Primal <: GridTopology end
+
+"""
+    Dual()
+
+Selects the operator on the dual grid, e.g. `get_curl(domain, Dual())` for `C̃ = Cᵀ` and
+`get_divergence(domain, Dual())` for `S̃ = -Gᵀ`.
+"""
 struct Dual   <: GridTopology end
 
+"""
+    Direction
+
+An axis of the grid: `DirX()`, `DirY()` or `DirZ()`, along u, v or w. It gives the normal
+of a loop source or a cut plane, the axis of a cylinder, torus or helix, the component of
+an edge or facet quantity, and, with `Positive()` or `Negative()`, a face of the domain.
+"""
 abstract type Direction end
 
+"""
+    DirX()
+
+The u axis, x in the views; see `Direction`.
+"""
 struct DirX <: Direction end
+
+"""
+    DirY()
+
+The v axis, y in the views; see `Direction`.
+"""
 struct DirY <: Direction end
+
+"""
+    DirZ()
+
+The w axis, z in the views; see `Direction`.
+"""
 struct DirZ <: Direction end
 
 
@@ -97,13 +134,20 @@ The panel next to the scene has
     with `color = "background"`, is drawn transparent;
   - "combined": the solids put together as smooth surfaces. Where they overlap the
     later one wins, as in the material, and cut-outs are subtracted (and still drawn
-    transparent over their holes). The surfaces come from the objects' shapes,
-    sampled 240 times along the longest side of the domain, not from the FIT grid;
+    transparent over their holes). Solids of the same colour and material that touch,
+    e.g. the pieces of a wire, form one surface without a seam between them. The
+    surfaces come from the objects' shapes, not from the FIT grid, sampled at least
+    240 times along the longest side of the domain, and finely enough that the
+    thinnest solid, e.g. a thin plate, is three samples thick, as far as a limit on
+    the number of samples allows;
   - "voxels": the cells each object occupies on the FIT grid, by the same rules: what
     the solver sees.
   Values written directly into `domain.material` are not shown;
+- the size of the grid: its number of cells (see `get_cell_count`) and the cells along
+  each axis;
 - a checkbox per object, in its colour, to show or hide it, or a checkbox per object
-  type when there are more than 15 objects;
+  type when there are more than 15 objects, and then a menu of all objects by name,
+  with a search field, in which picking an object shows or hides it;
 - "Show all"; a click on an object (without dragging) hides it and names it;
 - "Reset view", which brings the camera back to where it started;
 - a cut: a plane along x, y or z, moved over the grid nodes with a slider, which
@@ -161,7 +205,7 @@ function view_domain end
 
 # Domain
 export FITDomain
-export create_domain
+export create_domain, get_cell_count
 export list_objects
 export remove_object!, undo!, change_resolution, get_source
 
@@ -179,10 +223,10 @@ export create_helix!, get_helix_ends
 export create_brick!
 export create_circular_loop_source!
 export create_rectangular_loop_source!
-export create_polyline_source!, get_source_ends
+export create_polyline_source!, get_source_ends, get_source_path
 export get_source_length
 export create_electric_charge!
-export create_circular_loop_source   # deprecated
+#export create_circular_loop_source # old call, deprecated, exported by Base.@deprecated
 
 #Option to Load and Save Domain
 export save_domain, load_domain

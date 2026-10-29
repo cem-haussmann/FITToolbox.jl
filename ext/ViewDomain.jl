@@ -20,9 +20,21 @@ function _check_3d_backend(backend = Makie.current_backend())
     return nothing
 end
 
+# The size of the grid for the panel, "480 000 cells: 100 × 80 × 60", digits in groups
+# of three
+_thousands(n::Integer) = replace(string(n), r"(?<=\d)(?=(\d{3})+$)" => " ")
+_grid_label(domain) = "$(_thousands(FITToolbox.get_cell_count(domain))) cells: \
+                       $(domain.Nu - 1) × $(domain.Nv - 1) × $(domain.Nw - 1)"
+
 _type_name(obj) = string(nameof(typeof(obj)))
 
 # Checkbox groups for the panel: (label, obj_ids, swatch colour or nothing).
+# The entries of the object menu, which the panel adds when it has a checkbox per type:
+# (label, obj_id) for every object, by name, type and obj_id, marked when hidden
+_object_menu_options(entries, shown) =
+    [(string(e.name, "  (", _type_name(e.object), ", ", e.obj_id, ")",
+             shown[e.obj_id][] ? "" : "  — hidden"), e.obj_id) for e in entries]
+
 # One group per object up to _MAX_OBJECT_TOGGLES objects, else one per object type.
 function _toggle_groups(entries, colors)
     if length(entries) <= _MAX_OBJECT_TOGGLES
@@ -63,15 +75,11 @@ function _object_colors(entries)
     return colors
 end
 
-# A cut-out, a solid with color = "background": transparent in the objects view, a hole
+# A cut-out, a solid with color = "background": transparent in the defined view, a hole
 # in the geometry and voxel views. Only the marker counts: an object that merely has
 # vacuum values, e.g. one not given a material yet, is drawn as any other.
-_is_background(domain, o) = o isa FITToolbox.AbstractSolid && o.material.color == "background"
+_is_background(o) = o isa FITToolbox.AbstractSolid && o.material.color == "background"
 const _BACKGROUND_ALPHA = 0.15
-
-_axis_index(::DirX) = 1
-_axis_index(::DirY) = 2
-_axis_index(::DirZ) = 3
 
 # The positions the cut can take along axis 1, 2 or 3: the grid nodes
 _cut_positions(domain, axis::Int) = (domain.nodes_u, domain.nodes_v, domain.nodes_w)[axis]
@@ -134,14 +142,14 @@ function _cut_grid_segments(domain, axis::Int, pos)
 end
 
 # The primal edges a loop source occupies, from the same discretisation get_source
-# uses: the edges as pairs of points, their centres, and the direction of the current
-# on each (edge vector times the ±1 orientation, independent of the amplitude)
+# uses (for a polyline its walk, without a vector of the whole grid): the edges as pairs
+# of points, their centres, and the direction of the current on each (edge vector times
+# the ±1 orientation, independent of the amplitude)
 function _loop_edges(domain, loop::FITToolbox.AbstractEdgeSource)
-    J = FITToolbox._unit_source(domain, loop)
     nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
     edges = (domain.edges_u, domain.edges_v, domain.edges_w)
     segs, mids, dirs = Point3f[], Point3f[], Vec3f[]
-    for p in findall(!iszero, J)
+    for (p, current) in FITToolbox._occupied_edges(domain, loop)
         c, q = divrem(p - 1, domain.Np)          # component and node, both 0-based
         k, r = divrem(q, domain.Nu * domain.Nv)
         j, i = divrem(r, domain.Nu)
@@ -150,7 +158,7 @@ function _loop_edges(domain, loop::FITToolbox.AbstractEdgeSource)
         step = Vec3f(ntuple(d -> d == c + 1 ? edges[d][ijk[d]] : 0.0, 3))
         push!(segs, from, from + step)
         push!(mids, from + step / 2)
-        push!(dirs, sign(J[p]) * step)
+        push!(dirs, sign(current) * step)
     end
     return segs, mids, dirs
 end
@@ -167,11 +175,11 @@ function _owner_labels(domain)
     Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
         for e in FITToolbox.list_objects(domain).entries
             e.object isa FITToolbox.AbstractSolid || continue
-            id = _is_background(domain, e.object) ? 0 : e.obj_id      # background: a hole
+            id = _is_background(e.object) ? 0 : e.obj_id      # background: a hole
             FITToolbox._apply!(scratch, _with_material(e.object, FITToolbox.Material(id, 1.0, 1.0)))
         end
     end
-    return round.(Int, view(scratch.material, :, :, :, 1))
+    return round.(Int32, view(scratch.material, :, :, :, 1))      # half the memory of Int
 end
 
 # a copy of a solid with another material
@@ -206,11 +214,12 @@ count as empty: a cut then shows a filled cross-section instead of a hollow shel
 _voxel_meshes(domain, label; keep = nothing) =
     keep === nothing ? _voxel_meshes(domain, label, 0, 0) : _voxel_meshes(domain, label, keep...)
 
-function _voxel_meshes(domain, label::AbstractArray{Int,3}, keep_axis::Int, keep_m::Int)
+function _voxel_meshes(domain, label::AbstractArray{<:Integer,3}, keep_axis::Int, keep_m::Int)
     nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
     n = size(label)
     lab(i, j, k) = (1 <= i <= n[1] && 1 <= j <= n[2] && 1 <= k <= n[3] &&
-                    (keep_axis == 0 || (i, j, k)[keep_axis] <= keep_m)) ? label[i, j, k] : 0
+                    (keep_axis == 0 || (i, j, k)[keep_axis] <= keep_m)) ? label[i, j, k] :
+                                                                         zero(eltype(label))
     pts = Dict{Int,Vector{Point3f}}()
     fcs = Dict{Int,Vector{_TriFace}}()
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
@@ -285,7 +294,7 @@ _draw_object!(scene, t::FITToolbox.Torus, color; kw...) = mesh!(scene, _torus_me
 # normals pointing out of the tube
 function _torus_mesh(t::FITToolbox.Torus; n = 64, m = 32)
     a = _axis_index(t.axis)
-    b, c = filter(!=(a), (1, 2, 3))
+    b = first(filter(!=(a), (1, 2, 3)))     # the other in-plane axis takes the sine
     R, r = t.major_radius, t.minor_radius
     pts, nrm = Point3f[], Vec3f[]
     for i in 0:n-1, j in 0:m-1
@@ -394,6 +403,7 @@ end
 # CairoMakie cannot draw it, but can build it and run every callback.
 function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
                       size = (1400, 750), refine::Int = 1)
+    refine >= 1 || throw(ArgumentError("refine must be at least 1, got $refine"))
     specs = _field_specs(domain, fields)             # checked before anything is drawn
 
     entries = FITToolbox.list_objects(domain).entries
@@ -440,7 +450,7 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
                             visible = lift(&, shown[id], edges_shown, arrows_on))
             plot_ids[plt] = id
         elseif e.object isa FITToolbox.PointCharge
-            # as given in the objects view; on the node that receives it in the voxel view
+            # as given in the defined view; on the node that receives it in the voxel view
             plt = _draw_object!(ls, e.object, c; clip_planes = planes,
                                 visible = lift((s, v) -> s && !v, shown[id], voxel_mode))
             plot_ids[plt] = id
@@ -451,7 +461,7 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
             # as defined: a solid in the defined view only, the combined view draws its
             # surface instead; a cut-out transparent, also over the hole it makes in
             # the combined view
-            bg = _is_background(domain, e.object)
+            bg = _is_background(e.object)
             plt = _draw_object!(ls, e.object, bg ? (c, _BACKGROUND_ALPHA) : c;
                                 transparency = bg, clip_planes = planes,
                                 visible = lift((s, v, g) -> s && !v && (bg || !g), shown[id],
@@ -472,7 +482,7 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
     # the combined surfaces, of the solids that are not cut-outs; built when the
     # combined view is first opened. Untyped: the meshes carry normals, the stand-in not
     shapes = Dict(e.obj_id => Observable{Any}(_EMPTY_VOXELS) for e in entries
-                  if e.object isa FITToolbox.AbstractSolid && !_is_background(domain, e.object))
+                  if e.object isa FITToolbox.AbstractSolid && !_is_background(e.object))
     for (id, m) in shapes
         plt = mesh!(ls, m; color = colors[id], visible = lift(&, shown[id], combined_mode))
         plot_ids[plt] = id
@@ -487,6 +497,8 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
                      default = "defined")
     connect!(voxel_mode, lift(==("voxels"), view_menu.selection))
     connect!(combined_mode, lift(==("combined"), view_menu.selection))
+    Label(panel[row += 1, 1:3], _grid_label(domain); halign = :left, word_wrap = true,
+          tellwidth = false)
     Label(panel[row += 1, 1:3], "Objects"; font = :bold, halign = :left)
     isempty(entries) && Label(panel[row += 1, 1:3], "none"; halign = :left)
 
@@ -499,6 +511,24 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
     end
 
     info = Observable(isempty(entries) ? " " : "Click an object to hide it")
+    # With a checkbox per type, a menu of all objects by name: picking one shows or hides
+    # it. Its entries say which are hidden; they are brought up to date when it opens,
+    # not with every change, which "Show all" makes for every object at once.
+    object_menu = nothing
+    if length(entries) > _MAX_OBJECT_TOGGLES
+        object_menu = Menu(panel[row += 1, 1:3]; options = _object_menu_options(entries, shown),
+                           prompt = "Show or hide an object …", default = nothing)
+        on(open -> open && (object_menu.options[] = _object_menu_options(entries, shown)),
+           object_menu.is_open)
+        on(object_menu.i_selected) do i
+            i > 0 || return
+            id = object_menu.options[][i][2]
+            shown[id][] = !shown[id][]
+            name = only(e.name for e in entries if e.obj_id == id)
+            info[] = "$(shown[id][] ? "shown" : "hidden"): $name (obj_id $id)"
+            object_menu.i_selected[] = 0             # back to the prompt, ready for the next
+        end
+    end
     Label(panel[row += 1, 1:3], info; halign = :left, tellwidth = false)
     buttons  = GridLayout(panel[row += 1, 1:3])
     show_all = _button(buttons[1, 1], "Show all")
@@ -545,15 +575,19 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
     onany((_...) -> update_voxels!(), voxel_mode, cut_on.checked, axis, slider.value)
 
     grid = Ref{Any}(nothing)                                 # the sampling, on first use
+    groups = Ref{Any}(nothing)
     fields = Ref{Any}(nothing)
+    uncut = Ref{Any}(nothing)                                # the surfaces without a cut
     function update_shapes!()
         combined_mode[] || return
         if fields[] === nothing
             grid[] = _combined_grid(domain)
-            fields[] = _combined_fields(domain, grid[])
+            groups[] = _combined_groups(domain, grid[])
+            fields[] = _combined_fields(domain, grid[]; groups = groups[])
+            uncut[] = _combined_meshes(fields[], groups[], grid[])
         end
         cut = cut_on.checked[] ? (axis[], slider.value[]) : nothing
-        meshes = _combined_meshes(fields[], grid[]; cut)
+        meshes = cut === nothing ? uncut[] : _combined_meshes(fields[], groups[], grid[]; cut)
         for (id, m) in shapes
             m[] = get(meshes, id, _EMPTY_VOXELS)
         end
@@ -604,6 +638,6 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
 
     colsize!(fig.layout, 2, Fixed(270))
     colsize!(fig.layout, 3, Fixed(250))
-    return fig, (; ls, shown, voxels, voxel_mode, shapes, combined_mode, planes, plot_ids, info,
+    return fig, (; ls, shown, voxels, voxel_mode, shapes, combined_mode, planes, plot_ids, info, object_menu,
                  cut = cut_on.checked, grid_box = grid_on, field)
 end

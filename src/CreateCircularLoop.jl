@@ -20,13 +20,13 @@ _describe_geometry(c::CircularLoop) =
 _describe_material(c::CircularLoop) = "I=$(_short(c.current)) A"
 
 """
-    create_circular_loop_source!(config, radius, center_u, center_v, center_w, normal;
+    create_circular_loop_source!(domain, center_u, center_v, center_w, radius, normal;
                                  units = "m", current = 1.0, name = "") -> obj_id
 
-Add a closed circular wire loop carrying `current` (in A) to `config` and return its
+Add a closed circular wire loop carrying `current` (in A) to `domain` and return its
 `obj_id`. The loop is recorded in the history like `create_brick!`; its discrete
 current vector, the right-hand side ĵ of the curl–curl system, comes from
-`get_source(config, obj_id)` or `get_source(config, name)`. It has length `3Np` in the
+`get_source(domain, obj_id)` or `get_source(domain, name)`. It has length `3Np` in the
 edge layout and is recomputed on the current grid, so it stays valid after
 `change_resolution`. `current` may be complex, e.g. for phasors in the frequency
 domain; the source vector is then `ComplexF64`.
@@ -40,202 +40,134 @@ oriented counter-clockwise about the normal, i.e. with the magnetic moment along
 divergence `S̃J = 0` holds exactly. The enclosed area approaches πR² as the grid is
 refined.
 
-`radius` and the centre coordinates are given in `units`.
+The centre coordinates and `radius` are given in `units`. The centre comes first, as for
+`create_sphere!` and the other objects; the deprecated `create_circular_loop_source`
+takes the radius first.
 
 # Errors and warnings
 
 Throws an `ArgumentError` if the centre coordinate along the normal lies outside
 `nodes[1] … nodes[end-2]` in that direction, if the circle does not fit within
-`nodes[1] … nodes[end-2]` in the two in-plane directions, if the radius is not
-positive, or if `name` is already used. Nothing is recorded then. Warns if the radius
-is too small to mark any edge.
+`nodes[1] … nodes[end-2]` in the two in-plane directions, if the grid has fewer than
+three nodes in a direction (that range is then empty), if the radius is not positive,
+or if `name` is already used. Nothing is recorded then. Warns if the radius is too
+small to mark any edge.
 
 # Example
 
 ```julia
-create_circular_loop_source!(domain, 50.0, 850.0, 700.0, 700.0, DirX();
+create_circular_loop_source!(domain, 850.0, 700.0, 700.0, 50.0, DirX();
                              units = "mm", current = 1000.0, name = "coil")   # 1 kA loop
 J = get_source(domain, "coil")
 ```
 """
-function create_circular_loop_source!(config::FITDomain, radius, center_u, center_v, center_w,
-                                     normal::Direction; units="m", current=1.0, name::String="")
+function create_circular_loop_source!(domain::FITDomain, center_u, center_v, center_w, radius,
+                                     normal::Direction; units="m", current=1.0,
+                                     name::AbstractString="")
     unitToMeter = check_units(units)
-    name = _resolve_name(config, name)
+    name = _resolve_name(domain, name)
     loop = CircularLoop((center_u*unitToMeter, center_v*unitToMeter, center_w*unitToMeter), radius*unitToMeter, normal, current)
-    _discretize_source(config, loop)     # throws on invalid input, before anything is recorded
-    return _record_create!(config, loop; name)
+    _check_source(domain, loop)          # throws on invalid input, before anything is recorded
+    return _record_create!(domain, loop; name)
 end
 
-# the loop with ±1 on its edges; scaled by the current it is the source vector
-_unit_source(config::FITDomain, loop::CircularLoop) =
-    _circular_loop_unit_source(config, loop, loop.normal)
+# Loops lie within nodes[1] … nodes[end-2] in every direction (see the docstring), so the
+# grid needs at least three nodes in each; the rectangular loop shares this
+function _check_loop_grid(config::FITDomain)
+    for (name, n) in (("u", config.Nu), ("v", config.Nv), ("w", config.Nw))
+        n >= 3 || throw(ArgumentError("a loop source needs at least 3 nodes in every \
+                                       direction, but the grid has $n in $name"))
+    end
+    return nothing
+end
 
-function _circular_loop_unit_source(config, loop::CircularLoop, ::DirY)
-    Nodes_U, Nodes_W = config.nodes_u, config.nodes_w
-    Eu_c, Ew_c = config.edges_u_center, config.edges_w_center
-    Nu, Nv, Nw, Np = config.Nu, config.Nv, config.Nw, config.Np
-
-    cu, cv, cw = loop.center
+# The checks of the docstring: a positive radius, the plane within nodes[1] … nodes[end-2]
+# along the normal, and the circle within them in the two in-plane directions
+function _check_loop_fits(config::FITDomain, loop::CircularLoop)
     R = loop.radius
     R > 0 || throw(ArgumentError("radius must be positive, got $R m"))
-    
-    # The loop lies in the u–w plane, so only u and w constrain the radius; v only
-    # has to fall inside the domain.
-    _within(cv, config.nodes_v, config.nodes_v[1], config.nodes_v[end-2]) ||
-        throw(ArgumentError("coil plane lies outside the domain in v-direction"))
-    _within(cu - R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) &&
-    _within(cu + R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) ||
-        throw(ArgumentError("coil does not fit in the domain in u-direction"))
-    _within(cw - R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) &&
-    _within(cw + R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) ||
-        throw(ArgumentError("coil does not fit in the domain in w-direction"))
- 
-
-    j = _find_index(config.nodes_v, cv)
-    
-    J = zeros(Float64, 3*Np)
-    ρ(u, w) = hypot(u - cu, w - cw)          # distance from the loop centre
- 
-    for kI in 2:Nw-1, iI in 2:Nu-1
-        p = 1 + (iI-1) + (j-1)*Nu + (kI-1)*Nu*Nv
- 
-        # Three corners of the cell in the u–w plane. An edge is crossed when the
-        # circle separates its two endpoints, i.e. exactly one of them is outside.
-        out1 = ρ(Eu_c[iI],   Ew_c[kI-1]) >= R
-        out2 = ρ(Eu_c[iI-1], Ew_c[kI]  ) >= R
-        out3 = ρ(Eu_c[iI],   Ew_c[kI]  ) >= R
- 
-        # counter-clockwise about +v, i.e. along v × r:
-        # u-directed edge: +u above the centre in w, −u below
-        out3 != out1 && (J[p] = Nodes_W[kI] >= cw ? 1.0 : -1.0)
-        # w-directed edge: −w beyond the centre in u, +w before it
-        out3 != out2 && (J[p + 2*Np] = Nodes_U[iI] >= cu ?  -1.0 : 1.0)
+    _check_loop_grid(config)
+    nodes = (config.nodes_u, config.nodes_v, config.nodes_w)
+    names = ("u", "v", "w")
+    inner(d, x) = _within(x, nodes[d], nodes[d][1], nodes[d][end-2])
+    a = _axis_index(loop.normal)
+    inner(a, loop.center[a]) ||
+        throw(ArgumentError("coil plane lies outside the domain in $(names[a])-direction"))
+    for d in _inplane_axes(loop.normal)
+        inner(d, loop.center[d] - R) && inner(d, loop.center[d] + R) ||
+            throw(ArgumentError("coil does not fit in the domain in $(names[d])-direction"))
     end
- 
-    any(!iszero, J) ||
-        @warn "No edges were marked for the wire — is the radius smaller than one cell?"
- 
-    # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
-    # continuity, and the curl–curl system has no solution without it.
-    residual = norm(get_divergence(config, Dual()) * J)
-    residual > 1e-12 * norm(J) &&
-        @warn "The circular coil is not divergence free" residual
- 
-    return J
+    return nothing
 end
 
-function _circular_loop_unit_source(config, loop::CircularLoop, ::DirX)
-    Nodes_V, Nodes_W = config.nodes_v, config.nodes_w
-    Ev_c, Ew_c = config.edges_v_center, config.edges_w_center
-    Nu, Nv, Nw, Np = config.Nu, config.Nv, config.Nw, config.Np
-
-    cu, cv, cw = loop.center
-    R = loop.radius
-    R > 0 || throw(ArgumentError("radius must be positive, got $R m"))
-    
-    # The loop lies in the v–w plane, so only v and w constrain the radius; u only
-    # has to fall inside the domain.
-    _within(cu, config.nodes_u, config.nodes_u[1], config.nodes_u[end-2]) ||
-        throw(ArgumentError("coil plane lies outside the domain in u-direction"))
-    _within(cv - R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) &&
-    _within(cv + R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) ||
-        throw(ArgumentError("coil does not fit in the domain in v-direction"))
-    _within(cw - R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) &&
-    _within(cw + R, Nodes_W, Nodes_W[1], Nodes_W[end-2]) ||
-        throw(ArgumentError("coil does not fit in the domain in w-direction"))
- 
-
-    i = _find_index(config.nodes_u, cu)
-    
-    J = zeros(Float64, 3*Np)
-    ρ(v, w) = hypot(v - cv, w - cw)          # distance from the loop centre
- 
-    for kI in 2:Nw-1, jI in 2:Nv-1
-        p = 1 + (i-1) + (jI-1)*Nu + (kI-1)*Nu*Nv
- 
-        # Three corners of the cell in the v–w plane. An edge is crossed when the
-        # circle separates its two endpoints, i.e. exactly one of them is outside.
-        out1 = ρ(Ev_c[jI],   Ew_c[kI-1]) >= R
-        out2 = ρ(Ev_c[jI-1], Ew_c[kI]  ) >= R
-        out3 = ρ(Ev_c[jI],   Ew_c[kI]  ) >= R
- 
-        # v-directed edge: sign flips across the loop centre in w
-        out3 != out1 && (J[p + Np]   = Nodes_W[kI] >= cw ? -1.0 : 1.0)
-        # w-directed edge: sign flips across the loop centre in v
-        out3 != out2 && (J[p + 2*Np] = Nodes_V[jI] >= cv ?  1.0 : -1.0)
-    end
- 
-    any(!iszero, J) ||
-        @warn "No edges were marked for the wire — is the radius smaller than one cell?"
- 
-    # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
-    # continuity, and the curl–curl system has no solution without it.
-    residual = norm(get_divergence(config, Dual()) * J)
-    residual > 1e-12 * norm(J) &&
-        @warn "The circular coil is not divergence free" residual
- 
-    return J
+# A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
+# continuity, and the curl–curl system has no solution without it. The loops are closed
+# by construction, so a residual is a bug in the package, not a matter of the input.
+# `edges` holds the loop's current per unit, edge => ±1, so the sums are exact.
+function _check_closed(config::FITDomain, edges, what)
+    all(iszero, values(_dual_divergence(config, edges))) ||
+        error("the $what is not divergence free: this is a bug in FITToolbox, please \
+               report it")
+    return nothing
 end
 
-function _circular_loop_unit_source(config, loop::CircularLoop, ::DirZ)
-    Nodes_U, Nodes_V = config.nodes_u, config.nodes_v
-    Eu_c, Ev_c = config.edges_u_center, config.edges_v_center
-    Nu, Nv, Nw, Np = config.Nu, config.Nv, config.Nw, config.Np
+# The marked edges are the boundary of the cells in the loop's plane whose centres lie
+# inside the radius. An edge on the first node line of a direction has no cell before
+# it; that cell counts as outside, so a loop reaching into the first cells is closed
+# there too. The last cells never lie inside: the circle ends at nodes[end-2].
+# Only the cells around the circle are visited, so work and memory grow with its size
+# on the grid, not with the plane.
+function _unit_edges(config::FITDomain, loop::CircularLoop)
+    _check_loop_fits(config, loop)
+    nodes   = (config.nodes_u, config.nodes_v, config.nodes_w)
+    centres = (config.edges_u_center, config.edges_v_center, config.edges_w_center)
+    Nu, Nv, Np = config.Nu, config.Nv, config.Np
+    a = _axis_index(loop.normal)
+    b, c = _cyclic_axes(loop.normal)                # b × c along +normal
+    x, R = loop.center, loop.radius
+    plane = _find_index(nodes[a], x[a])
 
-    cu, cv, cw = loop.center
-    R = loop.radius
-    R > 0 || throw(ArgumentError("radius must be positive, got $R m"))
-
-    # The loop lies in the u–v plane, so only u and v constrain the radius; w only
-    # has to fall inside the domain.
-    _within(cw, config.nodes_w, config.nodes_w[1], config.nodes_w[end-2]) ||
-        throw(ArgumentError("coil plane lies outside the domain in w-direction"))
-    _within(cu - R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) &&
-    _within(cu + R, Nodes_U, Nodes_U[1], Nodes_U[end-2]) ||
-        throw(ArgumentError("coil does not fit in the domain in u-direction"))
-    _within(cv - R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) &&
-    _within(cv + R, Nodes_V, Nodes_V[1], Nodes_V[end-2]) ||
-        throw(ArgumentError("coil does not fit in the domain in v-direction"))
-
-
-    k = _find_index(config.nodes_w, cw)
-
-    J = zeros(Float64, 3*Np)
-    ρ(u, v) = hypot(u - cu, v - cv)          # distance from the loop centre
-
-    for jI in 2:Nv-1, iI in 2:Nu-1
-        p = 1 + (iI-1) + (jI-1)*Nu + (k-1)*Nu*Nv
-
-        # Three corners of the cell in the u–v plane. An edge is crossed when the
-        # circle separates its two endpoints, i.e. exactly one of them is outside.
-        out1 = ρ(Eu_c[iI],   Ev_c[jI-1]) >= R
-        out2 = ρ(Eu_c[iI-1], Ev_c[jI]  ) >= R
-        out3 = ρ(Eu_c[iI],   Ev_c[jI]  ) >= R
-
-        # counter-clockwise about +w, i.e. along w × r:
-        # u-directed edge: −u above the centre in v, +u below
-        out3 != out1 && (J[p]      = Nodes_V[jI] >= cv ? -1.0 : 1.0)
-        # v-directed edge: +v beyond the centre in u, −v before it
-        out3 != out2 && (J[p + Np] = Nodes_U[iI] >= cu ?  1.0 : -1.0)
+    # The cells along axis d whose centres lie within R of the centre, and two more on
+    # each side: the cells just outside decide the edges around the circle, the next ones
+    # guard against rounding. Cells outside the circle mark no edge, so more do no harm.
+    function cells(d)
+        n = length(centres[d])
+        return max(1, searchsortedlast(centres[d], x[d] - R) - 1):min(n, searchsortedfirst(centres[d], x[d] + R) + 1)
+    end
+    # cell (ib, ic) in the plane, by its indices along b and c; cell 0 is before the first
+    outside(ib, ic) = ib == 0 || ic == 0 ||
+                      hypot(centres[b][ib] - x[b], centres[c][ic] - x[c]) >= R
+    # the edge along axis `dir` starting from node (ib, ic) in the plane
+    function edge(dir, ib, ic)
+        i, j, k = ntuple(d -> d == a ? plane : d == b ? ib : ic, 3)
+        return (dir - 1)*Np + i + (j - 1)*Nu + (k - 1)*Nu*Nv
     end
 
-    any(!iszero, J) ||
+    net = Dict{Int,Float64}()
+    for ic in cells(c), ib in cells(b)
+        # The edges from node (ib, ic) separate cell (ib, ic) from the cell before it
+        # along c (the b-edge) or along b (the c-edge); an edge is marked when exactly
+        # one of the two lies inside. Counter-clockwise about the normal, i.e. along
+        # normal × r, the direction follows from which side of the edge is inside (the
+        # side of the loop it is on), so the loop closes on any grid, also where it
+        # collapses onto the centre line:
+        inside = !outside(ib, ic)
+        # b-edge: +b at the bottom of the loop (inside after it in c), −b at the top
+        outside(ib, ic - 1) == inside && (net[edge(b, ib, ic)] = inside ? 1.0 : -1.0)
+        # c-edge: −c on the near side in b (inside after it), +c on the far side
+        outside(ib - 1, ic) == inside && (net[edge(c, ib, ic)] = inside ? -1.0 : 1.0)
+    end
+
+    isempty(net) &&
         @warn "No edges were marked for the wire — is the radius smaller than one cell?"
-
-    # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
-    # continuity, and the curl–curl system has no solution without it.
-    residual = norm(get_divergence(config, Dual()) * J)
-    residual > 1e-12 * norm(J) &&
-        @warn "The circular coil is not divergence free" residual
-
-    return J
+    _check_closed(config, net, "circular coil")
+    return net
 end
 
-# deprecated in 0.3.0: the loop is recorded in the history and returns its obj_id
-function create_circular_loop_source(config::FITDomain, args...; kwargs...)
-    Base.depwarn("`create_circular_loop_source` is deprecated, use \
-                  `id = create_circular_loop_source!(...)` and `J = get_source(domain, id)`",
-                 :create_circular_loop_source)
-    return get_source(config, create_circular_loop_source!(config, args...; kwargs...))
-end
+# deprecated in 0.3.0: the loop is recorded in the history and returns its obj_id, and
+# the centre comes before the radius, as for the other objects. The old name keeps the
+# old order and still returns the source vector.
+@deprecate(create_circular_loop_source(domain::FITDomain, radius, center_u, center_v, center_w,
+                                       normal; kwargs...),
+           get_source(domain, create_circular_loop_source!(domain, center_u, center_v, center_w,
+                                                           radius, normal; kwargs...)))

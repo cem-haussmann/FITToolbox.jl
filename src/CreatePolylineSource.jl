@@ -37,7 +37,8 @@ the axis whose next cell-centre plane the line crosses first (on a tie the lower
 u before v before w). The path is therefore connected by construction, one edge per
 step, and runs through the nodes nearest to the line, within half a cell diagonal of
 it, on graded grids too. Along a grid axis it is exact; a diagonal piece becomes a
-staircase. Every edge carries ±`current` in the direction of travel.
+staircase. Every edge carries ±`current` in the direction of travel; `get_source_path`
+gives the edges in their order along the wire.
 
 The wire is divergence free everywhere except at its ends: an open polyline has the
 divergence `+current` at its first node, where the current enters the grid, and
@@ -51,8 +52,9 @@ open polyline therefore prints an info message naming the two end nodes.
 # Errors
 
 Throws an `ArgumentError` for fewer than two points (three if `closed`), for a point
-outside the domain, if all points snap to the same node, or if `name` is already used.
-Nothing is recorded then.
+outside the domain, if all points snap to the same node, if the polyline cancels itself
+(every edge walked as often back as forth, e.g. there and back along one line), or if
+`name` is already used. Nothing is recorded then.
 
 # Example
 
@@ -66,14 +68,14 @@ create_polyline_source!(domain, [(0.2, 0.2, 0.3), (0.8, 0.2, 0.3), (0.5, 0.7, 0.
 ```
 """
 function create_polyline_source!(domain::FITDomain, points::AbstractVector; closed::Bool=false,
-                                 units="m", current=1.0, name::String="")
+                                 units="m", current=1.0, name::AbstractString="")
     unitToMeter = check_units(units)
     all(p -> length(p) == 3, points) ||
         throw(ArgumentError("every point needs 3 coordinates (u, v, w)"))
     name = _resolve_name(domain, name)
     wire = PolylineSource([ntuple(d -> Float64(p[d]) * unitToMeter, 3) for p in points],
                           closed, current)
-    _discretize_source(domain, wire)     # throws on invalid input, before anything is recorded
+    _check_source(domain, wire)          # throws on invalid input, before anything is recorded
     first_node, last_node = _polyline_nodes(domain, wire)[[1, end]]
     if !closed && first_node != last_node
         at(n) = _short(ntuple(d -> (domain.nodes_u, domain.nodes_v, domain.nodes_w)[d][n[d]], 3))
@@ -86,24 +88,28 @@ function create_polyline_source!(domain::FITDomain, points::AbstractVector; clos
 end
 
 """
-    get_source_ends(domain, name)   -> (start = p, stop = q) or nothing
-    get_source_ends(domain, obj_id) -> (start = p, stop = q) or nothing
+    get_source_ends(domain, name)   -> (start, stop, start_node, stop_node) or nothing
+    get_source_ends(domain, obj_id) -> (start, stop, start_node, stop_node) or nothing
 
-The two end nodes of a polyline source from `create_polyline_source!`, as node indices
-in `1:Np`, the layout of `get_index_entity(domain, PrimalNode(), …)` and of nodal
-vectors such as a potential. `start` is the node where the current enters the grid,
-`stop` where it leaves: the nodes the first and the last point snap to, independent of
-the sign of the current. For a positive current the divergence of its source vector is
-`+current` at `start` and `-current` at `stop`.
+The two ends of a polyline source from `create_polyline_source!`: `start` is where the
+current enters the grid, `stop` where it leaves, as positions `(u, v, w)` in m, like the
+ends of a helix from `get_helix_ends`. They are the nodes the first and the last point
+snap to, independent of the sign of the current, so `start_node` and `stop_node` give
+them as node indices in `1:Np` as well, the layout of
+`get_index_entity(domain, PrimalNode(), …)` and of nodal vectors such as a potential.
+For a positive current the divergence of the source vector is `+current` at
+`start_node` and `-current` at `stop_node`.
 
 Returns `nothing` if the polyline has no ends: if it is closed, or ends where it started.
-Throws an `ArgumentError` if no such object exists or it is not a polyline source.
+Throws an `ArgumentError` if no such object exists or it is not a polyline source. The
+whole path between the ends, edge by edge in order, comes from `get_source_path`.
 
 # Example
 
 ```julia
 ends = get_source_ends(domain, "wire")
-get_position_of_index(domain, PrimalNode(), ends.start)     # its coordinates
+ends.start                      # (u, v, w) in m
+Φ[ends.start_node]              # the potential there
 ```
 """
 get_source_ends(domain::FITDomain, name::AbstractString) =
@@ -117,7 +123,128 @@ function get_source_ends(domain::FITDomain, obj_id::Int)
     path = _polyline_nodes(domain, e.object)
     path[1] == path[end] && return nothing
     node(n) = n[1] + (n[2]-1)*domain.Nu + (n[3]-1)*domain.Nu*domain.Nv
-    return (start = node(path[1]), stop = node(path[end]))
+    at(n) = (domain.nodes_u[n[1]], domain.nodes_v[n[2]], domain.nodes_w[n[3]])
+    return (start = at(path[1]), stop = at(path[end]),
+            start_node = node(path[1]), stop_node = node(path[end]))
+end
+
+"""
+    get_source_path(domain, name)   -> (edges, signs, lengths, nodes, pieces, planned_lengths)
+    get_source_path(domain, obj_id) -> (edges, signs, lengths, nodes, pieces, planned_lengths)
+
+The edges of a polyline source from `create_polyline_source!` in the order the current
+runs along them, e.g. to build a transmission-line model of the wire on the grid:
+
+- `edges`: their indices in the edge layout, `1:3Np` (see `get_curl`);
+- `signs`: `+1.0` where the current runs along the edge's axis, `-1.0` against it;
+- `lengths`: their lengths in m, which differ between the axes and on a graded grid;
+- `nodes`: the nodes the path passes, in `1:Np`, one more than there are edges: edge
+  `edges[m]` runs from `nodes[m]` to `nodes[m+1]`. An open polyline runs from the
+  `start_node` to the `stop_node` of `get_source_ends`; a closed one ends where it starts;
+- `pieces`: the straight piece of the polyline each edge belongs to, `k` for the piece
+  from point `k` to point `k+1`; the closing piece of a closed polyline is the last;
+- `planned_lengths`: the length of the planned wire each edge stands for, in m (below).
+
+The path is the walk of `get_source` without its steps back along the edge just walked.
+At a sharp corner the next piece of a polyline can run back over the end of the previous
+one: those steps cancel in the source vector, and in a path they would be a dead end,
+there and back. So every edge of the source vector is in the path once, and the edges
+with their signs add up to it exactly, `Σₘ signs[m] e[edges[m]] = get_source(…) / current`.
+A closed polyline whose last step goes back along its first edge starts at the next node.
+
+The path is a staircase, longer than the line it follows (see `get_source_length`): a
+straight piece of direction `Δ` becomes `‖Δ‖₁/‖Δ‖₂` times as long, `√2` at 45° in a
+plane, `√3` along a space diagonal. `planned_lengths` undo this piece by piece: the length
+of each piece, from the points as given, is shared among the edges walked for it in
+proportion to their lengths, so that they add up to it exactly. A piece whose points snap
+to the same node walks no edge; its length goes to the next piece that does, so a curve
+drawn with points closer than a cell keeps its length too. Its single edges then get
+uneven shares, which even out over a few cells; drawn with points about a cell apart,
+each piece's edges share its length evenly. A per-length quantity of the
+real wire, e.g. the inductance and capacitance of a transmission-line model, belongs on
+the edges with `planned_lengths`: the wire then keeps its electrical length piece by
+piece, also where it is partly straight and partly diagonal.
+
+Where parts of the wire lie within a cell of each other, e.g. a leg running back next to
+another, or a corner sharper than the grid can follow, their edges cancel, and their
+length goes with them: no other part of the wire is stretched to make up for it.
+`sum(planned_lengths)` then falls short of the planned length of `get_source_length` by
+just that, and a warning says so when it is more than 5 %. A finer grid there, or the
+parts at least a cell apart, keep them.
+
+Unlike `get_source`, it builds no vector of the whole grid: its work and memory grow with
+the length of the path, not with the grid, as do those of `create_polyline_source!` and
+`get_source_length` for a polyline.
+
+Throws an `ArgumentError` if no such object exists or it is not a polyline source, if it
+does not fit the grid (as `get_source` does), or if it runs along an edge twice on the
+grid, overlapping itself, since its edges then have no single order.
+
+# Example
+
+```julia
+p = get_source_path(domain, "dipole")
+M = length(p.edges)
+Γ = sparse(1:M, p.edges, p.signs, M, 3 * domain.Np)    # segment m to its edge, along the path
+Γ' * ones(M) == get_source(domain, "dipole")            # for a current of 1 A
+L = L′ .* p.planned_lengths                             # per segment, as on the real wire
+points = [get_position_of_index(domain, PrimalNode(), q)[1:3] for q in p.nodes]
+```
+"""
+get_source_path(domain::FITDomain, name::AbstractString) =
+    get_source_path(domain, _entry(domain, name).obj_id)
+
+function get_source_path(domain::FITDomain, obj_id::Int)
+    e = _entry(domain, obj_id)
+    e.object isa PolylineSource ||
+        throw(ArgumentError("object $obj_id \"$(e.name)\" is a $(nameof(typeof(e.object))), \
+                             not a polyline source"))
+    walk = _polyline_walk(domain, e.object)            # the checks of get_source
+    allunique(walk.edges) ||
+        throw(ArgumentError("the polyline \"$(e.name)\" runs along an edge twice on the grid, \
+                             overlapping itself, so its edges have no single order"))
+    # Only steps that cancel are left out, so the path holds the edges of the source vector
+    # with their signs. True by construction; anything else is a bug in the package.
+    length(walk.net) == length(walk.edges) &&
+        all(get(walk.net, edge, 0.0) == sign for (edge, sign) in zip(walk.edges, walk.signs)) ||
+        error("the path of the polyline \"$(e.name)\" differs from its source vector: this is \
+               a bug in FITToolbox, please report it")
+    lengths = [_edge_length(domain, edge) for edge in walk.edges]
+    planned_lengths, planned = _planned_lengths(domain, e.object, walk.pieces, lengths)
+    # what the grid cannot hold: parts of the wire whose edges cancel
+    lost = 1 - sum(planned_lengths) / planned
+    lost > 0.05 &&
+        @warn "polyline \"$(e.name)\": $(round(Int, 100 * lost)) % of its planned length \
+               cancels on the grid, where parts of it lie within a cell of each other; \
+               planned_lengths cover only the rest"
+    return (edges = walk.edges, signs = walk.signs, lengths = lengths, nodes = walk.nodes,
+            pieces = walk.pieces, planned_lengths = planned_lengths)
+end
+
+# The length of the planned wire each edge of the path stands for, and the planned length
+# of the whole wire. Each piece has its curve length, from the points as given, and its
+# staircase, the edges walked between its snapped nodes. A piece whose points snap to one
+# node walks no edge: its curve length goes to the next piece that does (around the loop
+# for a closed polyline, to the last one at the end of an open polyline). Each walking
+# piece's curve length is shared among the edges it walked, in proportion to their
+# lengths, so that they add up to it exactly. There is no common factor: edges that cancel
+# take their share with them, so the sum falls short of the planned length by what the
+# grid cannot hold and nowhere else, and no other part of the wire is stretched for it.
+function _planned_lengths(domain::FITDomain, w::PolylineSource, pieces, lengths)
+    pts = w.closed ? [w.points..., w.points[1]] : collect(w.points)
+    snapped = _polyline_nodes(domain, w)
+    at(n) = (domain.nodes_u[n[1]], domain.nodes_v[n[2]], domain.nodes_w[n[3]])
+    K = length(pts) - 1
+    curve = [hypot((pts[k+1] .- pts[k])...) for k in 1:K]
+    stair = [sum(abs, at(snapped[k+1]) .- at(snapped[k])) for k in 1:K]
+    walking = findall(>(0), stair)          # not empty: the polyline does not collapse
+    covered = zeros(K)                      # the curve length each walking piece stands for
+    owner = 0
+    for k in K:-1:1                         # each piece to the next walking one
+        stair[k] > 0 && (owner = k)
+        covered[owner > 0 ? owner : w.closed ? first(walking) : last(walking)] += curve[k]
+    end
+    return [L * covered[k] / stair[k] for (k, L) in zip(pieces, lengths)], sum(curve)
 end
 
 # The nodes the points snap to, in order; for a closed polyline the first again at the end
@@ -135,35 +262,70 @@ function _polyline_nodes(config::FITDomain, w::PolylineSource)
     return w.closed ? [collect(snapped); [snapped[1]]] : collect(snapped)
 end
 
-function _unit_source(config::FITDomain, w::PolylineSource)
+# The walk of a polyline on the grid, kept sparse, with the checks get_source needs:
+# - `net`: the current per unit on each edge it passes, ±1, or ±2 where it runs along an
+#   edge twice; edges walked as often back as forth are left out;
+# - `edges`, `signs`, `nodes`: the path, its steps in order without those back along the
+#   edge just walked (see get_source_path), and `pieces`, the piece of the polyline each
+#   step was walked for (k: from point k to point k+1).
+# Work and memory grow with the length of the path, not with the grid, so that creating a
+# polyline, its path and its length stay cheap on large grids; get_source alone needs the
+# vector of the whole grid.
+function _polyline_walk(config::FITDomain, w::PolylineSource)
     path = _polyline_nodes(config, w)
     all(==(path[1]), path) &&
         throw(ArgumentError("the polyline collapses on the grid: all its points snap to \
                              the same node"))
-    J = zeros(Float64, 3 * config.Np)
+    node(n) = n[1] + (n[2]-1)*config.Nu + (n[3]-1)*config.Nu*config.Nv
+    net = Dict{Int,Float64}()
+    edges, signs, nodes, pieces = Int[], Float64[], [node(path[1])], Int[]
     for k in 1:length(path)-1
-        _walk_edges!(J, config, path[k], path[k+1])
+        _walk(config, path[k], path[k+1]) do edge, sign, reached
+            net[edge] = get(net, edge, 0.0) + sign
+            if !isempty(edges) && edges[end] == edge && signs[end] == -sign
+                # back along the edge just walked
+                pop!(edges); pop!(signs); pop!(nodes); pop!(pieces)
+            else
+                push!(edges, edge); push!(signs, sign); push!(nodes, node(reached)); push!(pieces, k)
+            end
+        end
+    end
+    filter!(e -> !iszero(e.second), net)
+    isempty(net) &&
+        throw(ArgumentError("the polyline cancels itself on the grid: every edge is walked as \
+                             often back as forth, so it carries no current"))
+    # a closed path can turn back where it closes: its last step undoes its first
+    while length(edges) >= 2 && nodes[1] == nodes[end] && edges[1] == edges[end] &&
+          signs[1] == -signs[end]
+        popfirst!(edges); popfirst!(signs); popfirst!(nodes); popfirst!(pieces)
+        pop!(edges); pop!(signs); pop!(nodes); pop!(pieces)
     end
 
     # Divergence free except at the ends of an open polyline: S̃J = +1 where the current
-    # enters, −1 where it leaves. True by construction; checked as for the loops.
-    expected = zeros(config.Np)
-    node_index(n) = n[1] + (n[2]-1)*config.Nu + (n[3]-1)*config.Nu*config.Nv
+    # enters, −1 where it leaves, and 0 at every other node the walk touches; an edge
+    # takes its current from its lower node to its upper one. True by construction, so,
+    # as for the loops, anything else is a bug in the package, not a matter of the input.
+    div = _dual_divergence(config, net)
     if path[1] != path[end]
-        expected[node_index(path[1])]   =  1.0
-        expected[node_index(path[end])] = -1.0
+        start, stop = node(path[1]), node(path[end])
+        div[start] = get(div, start, 0.0) - 1.0
+        div[stop]  = get(div, stop, 0.0) + 1.0
     end
-    residual = norm(get_divergence(config, Dual()) * J - expected)
-    residual > 1e-12 * norm(J) &&
-        @warn "The polyline source is not connected: its divergence is wrong away from the ends" residual
-    return J
+    all(iszero, values(div)) ||
+        error("the polyline source is not connected, its divergence is wrong away from the \
+               ends: this is a bug in FITToolbox, please report it")
+    return (net = net, edges = edges, signs = signs, nodes = nodes, pieces = pieces)
 end
 
-# Add the path of edges from node P to node Q to J, ±1 in the direction of travel. The
-# path follows the straight line between the two nodes: at every step it moves one edge
-# along the axis whose next cell-centre plane the line crosses first, so it always runs
-# through the nodes nearest to the line. On a tie the lower axis goes first.
-function _walk_edges!(J, config::FITDomain, P, Q)
+# the edges of the walk with their current per unit (see _discretize_source)
+_unit_edges(config::FITDomain, w::PolylineSource) = _polyline_walk(config, w).net
+
+# The walk from node P to node Q along the straight line between them: at every step it
+# moves one edge along the axis whose next cell-centre plane the line crosses first, so
+# it always runs through the nodes nearest to the line. On a tie the lower axis goes
+# first. Calls f(edge, sign, node) for each step in order: the edge's index in 1:3Np,
+# +1 along its axis or -1 against it, and the node (i, j, k) the step reaches.
+function _walk(f, config::FITDomain, P, Q)
     nodes   = (config.nodes_u, config.nodes_v, config.nodes_w)
     centres = (config.edges_u_center, config.edges_v_center, config.edges_w_center)
     Nu, Nv, Np = config.Nu, config.Nv, config.Np
@@ -182,8 +344,8 @@ function _walk_edges!(J, config::FITDomain, P, Q)
         step = Q[axis] > cur[axis] ? 1 : -1
         lower = step > 0 ? cur[axis] : cur[axis] - 1      # the edge starts at its lower node
         ijk = ntuple(d -> d == axis ? lower : cur[d], 3)
-        J[(axis-1)*Np + ijk[1] + (ijk[2]-1)*Nu + (ijk[3]-1)*Nu*Nv] += step
         cur[axis] += step
+        f((axis-1)*Np + ijk[1] + (ijk[2]-1)*Nu + (ijk[3]-1)*Nu*Nv, step, Tuple(cur))
     end
-    return J
+    return nothing
 end

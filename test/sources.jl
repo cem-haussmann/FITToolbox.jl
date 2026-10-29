@@ -29,7 +29,7 @@ _loop_source(d, args...; kw...) = get_source(d, create_circular_loop_source!(d, 
 
 d = _WIRE_GRID
 cu, cv, cw, R = 10.3, 15.2, 14.9, 8.0          # off-centre, so no symmetry hides a bug
-J  = @test_logs _loop_source(d, R, cu, cv, cw, DirX())                  # and no warnings
+J  = @test_logs _loop_source(d, cu, cv, cw, R, DirX())                  # and no warnings
 i0 = argmin(abs.(d.nodes_u .- cu))            # nearest node plane
 
 @testset "a closed loop of unit edge currents in one u-plane" begin
@@ -65,20 +65,20 @@ end
 end
 
 @testset "units" begin
-    @test _loop_source(d, 8000.0, 10300.0, 15200.0, 14900.0, DirX(); units = "mm") == J
+    @test _loop_source(d, 10300.0, 15200.0, 14900.0, 8000.0, DirX(); units = "mm") == J
 end
 
 @testset "invalid requests" begin
     # does not fit
-    @test_throws ArgumentError create_circular_loop_source!(d, R, 19.5, cv, cw, DirX())   # plane beyond nodes_u[end-2]
-    @test_throws ArgumentError create_circular_loop_source!(d, R, cu, 25.0, cw, DirX())   # v + R beyond the domain
-    @test_throws ArgumentError create_circular_loop_source!(d, R, cu, cv, 5.0, DirX())    # w − R below zero
-    @test_throws "u-direction" create_circular_loop_source!(d, R, cu, cv, cw, DirY())     # u + R = 18.3 > 18
-    @test_throws "w-direction" create_circular_loop_source!(d, 5.0, cu, cv, 29.5, DirZ()) # plane beyond nodes_w[end-2]
-    @test_throws "radius must be positive" create_circular_loop_source!(d, -1.0, cu, cv, cw, DirX())
+    @test_throws ArgumentError create_circular_loop_source!(d, 19.5, cv, cw, R, DirX())   # plane beyond nodes_u[end-2]
+    @test_throws ArgumentError create_circular_loop_source!(d, cu, 25.0, cw, R, DirX())   # v + R beyond the domain
+    @test_throws ArgumentError create_circular_loop_source!(d, cu, cv, 5.0, R, DirX())    # w − R below zero
+    @test_throws "u-direction" create_circular_loop_source!(d, cu, cv, cw, R, DirY())     # u + R = 18.3 > 18
+    @test_throws "w-direction" create_circular_loop_source!(d, cu, cv, 29.5, 5.0, DirZ()) # plane beyond nodes_w[end-2]
+    @test_throws "radius must be positive" create_circular_loop_source!(d, cu, cv, cw, -1.0, DirX())
 
     # smaller than a cell: nothing to mark, with a warning
-    id0 = @test_logs (:warn, r"No edges") create_circular_loop_source!(d, 0.1, 10.0, 15.0, 15.0, DirX())
+    id0 = @test_logs (:warn, r"No edges") create_circular_loop_source!(d, 10.0, 15.0, 15.0, 0.1, DirX())
     J0  = @test_logs (:warn, r"No edges") get_source(d, id0)
     @test iszero(J0)
 end
@@ -101,7 +101,7 @@ end
     end
     centre = (14.3, 15.2, 14.9)
     for (a, normal) in enumerate((DirX(), DirY(), DirZ()))
-        Jn = @test_logs _loop_source(g, 8.0, centre..., normal)          # and no warnings
+        Jn = @test_logs _loop_source(g, centre..., 8.0, normal)          # and no warnings
         @test iszero(get_divergence(g, Dual()) * Jn)                     # closed
         @test all(x -> x == 1 || x == -1, Jn[findall(!iszero, Jn)])
         m = moment(Jn)
@@ -118,7 +118,7 @@ end
 @testset "complex current" begin
     # same grid and loop as above, in fresh domains so the shared grid stays clean
     mk() = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5])
-    loop!(d; kw...) = create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); kw...)
+    loop!(d; kw...) = create_circular_loop_source!(d, 10.3, 15.2, 14.9, 8.0, DirX(); kw...)
     d = mk()
     unit = get_source(d, loop!(d))                              # 1 A, real
 
@@ -149,16 +149,19 @@ end
 @testset "deprecated create_circular_loop_source" begin
     mk() = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5])
 
-    # still returns the source vector, as before 0.3.0
+    # still returns the source vector, as before 0.3.0, and keeps the old order of the
+    # arguments, the radius first; the new function takes the centre first
     d = mk()
     J = @test_deprecated create_circular_loop_source(d, 8.0, 10.3, 15.2, 14.9, DirX();
                                                      current=1000.0, name="coil")
     e = mk()
-    @test J == get_source(e, create_circular_loop_source!(e, 8.0, 10.3, 15.2, 14.9, DirX();
+    @test J == get_source(e, create_circular_loop_source!(e, 10.3, 15.2, 14.9, 8.0, DirX();
                                                           current=1000.0))
 
     # and records the loop like the new function
-    @test only(list_objects(d)).name == "coil"
+    loop = only(list_objects(d))
+    @test loop.name == "coil"
+    @test loop.object.center == (10.3, 15.2, 14.9) && loop.object.radius == 8.0
     @test get_source(d, "coil") == J
 end
 
@@ -168,7 +171,7 @@ end
     # 0.2 + 0.1 = 0.30000000000000004 > 0.3 = nodes_v[end-2] without the slack
     d = create_domain([0.3, 0.4, 0.4], [0.05, 0.05, 0.05])
     @test 0.2 + 0.1 > d.nodes_v[end-2]
-    @test create_circular_loop_source!(d, 0.1, 0.1, 0.2, 0.2, DirX()) == 1
+    @test create_circular_loop_source!(d, 0.1, 0.2, 0.2, 0.1, DirX()) == 1
     @test iszero(get_divergence(d, Dual()) * get_source(d, 1))
 end
 
@@ -259,7 +262,7 @@ end
     end
 
     # the same orientation as the circular loop of that normal
-    circ = get_source(g, create_circular_loop_source!(g, 0.3, 1.5, 1.5, 1.5, DirY()))
+    circ = get_source(g, create_circular_loop_source!(g, 1.5, 1.5, 1.5, 0.3, DirY()))
     @test sign(moment(rect(1.2, 1.5, 1.2, 0.6, 0.6, DirY()))[2]) == sign(moment(circ)[2]) == 1
 
     # off the grid: corners on the nearest nodes; tuple and vector forms; units; current
@@ -376,27 +379,30 @@ end
     ends = get_source_ends(g, "wire")
     @test ends == get_source_ends(g, 1)
     # the nodes the first and last point snap to, as get_index_entity finds them
-    @test ends.start == get_index_entity(g, PrimalNode(), 0.1, 0.2, 0.3)
-    @test ends.stop  == get_index_entity(g, PrimalNode(), 0.8, 0.6, 0.9)
-    @test get_position_of_index(g, PrimalNode(), ends.start)[1:3] == (0.1, 0.2, 0.30000000000000004)
+    @test ends.start_node == get_index_entity(g, PrimalNode(), 0.1, 0.2, 0.3)
+    @test ends.stop_node  == get_index_entity(g, PrimalNode(), 0.8, 0.6, 0.9)
+    # and their positions, in m
+    @test ends.start == (0.1, 0.2, 0.30000000000000004)
+    @test ends.stop == get_position_of_index(g, PrimalNode(), ends.stop_node)[1:3]
     # where the divergence is: +I entering, -I leaving, nowhere else
     d = S * get_source(g, "wire")
-    @test d[ends.start] == 2.0 && d[ends.stop] == -2.0 && count(!iszero, d) == 2
+    @test d[ends.start_node] == 2.0 && d[ends.stop_node] == -2.0 && count(!iszero, d) == 2
 
     # the same ends for a negative or complex current: they belong to the geometry
     quiet(() -> create_polyline_source!(g, [a, b]; current = -1.0, name = "neg"))
     quiet(() -> create_polyline_source!(g, [a, b]; current = 1im, name = "ac"))
-    @test get_source_ends(g, "neg") == get_source_ends(g, "ac") == (start = ends.start, stop = ends.stop)
+    @test get_source_ends(g, "neg") == get_source_ends(g, "ac") == ends
 
     # no ends: closed, or ending where it started
     create_polyline_source!(g, [(0.2, 0.2, 0.3), (0.8, 0.2, 0.3), (0.5, 0.7, 0.3)]; closed = true, name = "tri")
-    create_polyline_source!(g, [(0.2, 0.2, 0.6), (0.8, 0.2, 0.6), (0.21, 0.19, 0.61)]; name = "back")
+    # (back round a corner: straight back along the same line would cancel and is rejected)
+    create_polyline_source!(g, [(0.2, 0.2, 0.6), (0.8, 0.2, 0.6), (0.5, 0.7, 0.6), (0.21, 0.19, 0.61)]; name = "back")
     @test get_source_ends(g, "tri") === nothing
     @test get_source_ends(g, "back") === nothing
 
     # on another grid: that grid's nodes
     fine = change_resolution(g, 0.05)
-    @test get_source_ends(fine, "wire").start == get_index_entity(fine, PrimalNode(), 0.1, 0.2, 0.35)
+    @test get_source_ends(fine, "wire").start_node == get_index_entity(fine, PrimalNode(), 0.1, 0.2, 0.35)
 
     # only for polylines
     create_rectangular_loop_source!(g, 0.2, 0.2, 0.2, 0.3, 0.3, DirZ(); name = "frame")
@@ -409,16 +415,17 @@ end
     quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
 
     # a circle: a staircase of 8R, 4/π times the circumference
-    create_circular_loop_source!(d, 0.2, 0.5, 0.5, 0.5, DirZ(); name = "circle")
+    create_circular_loop_source!(d, 0.5, 0.5, 0.5, 0.2, DirZ(); name = "circle")
     c = get_source_length(d, "circle")
     @test c.planned ≈ 2π * 0.2 && c.actual ≈ 8 * 0.2
 
     # a rectangle: the sides as given, snapped to the nodes, in the order given
     create_rectangular_loop_source!(d, 0.231, 0.312, 0.5, 0.347, 0.2, DirZ(); name = "rect")
     r = get_source_length(d, "rect")
-    @test r.planned == (0.347, 0.2) && all(r.actual .≈ (0.35, 0.2))
+    @test r.sides.planned == (0.347, 0.2) && all(r.sides.actual .≈ (0.35, 0.2))
+    @test r.planned ≈ 2 * (0.347 + 0.2) && r.actual ≈ 2 * (0.35 + 0.2)   # the perimeter, a length like the others
     id = create_rectangular_loop_source!(d, 0.5, 0.231, 0.312, 0.2, 0.347, DirX(); current = 2 + 1im)
-    @test all(get_source_length(d, id).actual .≈ (0.2, 0.35))           # v, then w; any current
+    @test all(get_source_length(d, id).sides.actual .≈ (0.2, 0.35))     # v, then w; any current
 
     # polylines: exact along an axis, longer on a diagonal (the sum of the extents)
     quiet() do
@@ -438,4 +445,308 @@ end
     create_sphere!(d, 0.5, 0.5, 0.5, 0.1; name = "ball")
     @test_throws "not a polyline source, rectangular loop or circular loop" get_source_length(d, "ball")
     @test_throws "no object named" get_source_length(d, "nothing")
+end
+
+@testset "polyline sources: cancelling and graded grids" begin
+    # there and back along one line: every edge is walked twice in opposite directions,
+    # so the source would be zero; rejected, nothing recorded
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test_throws "cancels itself" create_polyline_source!(d, [(0.1, 0.5, 0.5), (0.9, 0.5, 0.5), (0.1, 0.5, 0.5)])
+    @test isempty(d._history.steps)
+
+    # lengths on a graded grid: the edges the source occupies, each with its own length
+    g = create_domain([0.1, 0.2, 0.05, 0.15, 0.3, 0.2], [0.05, 0.1, 0.15, 0.2, 0.1, 0.1, 0.1, 0.2],
+                      [0.3, 0.1, 0.1, 0.2, 0.3])
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    quiet() do
+        create_polyline_source!(g, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]; name = "u")
+        create_polyline_source!(g, [(0.1, 0.05, 0.0), (0.1, 0.95, 0.0)]; name = "v")   # 0.95 snaps to 1.0
+        create_polyline_source!(g, [(0.3, 0.3, 0.0), (0.3, 0.3, 1.0)]; name = "w")
+    end
+    @test get_source_length(g, "u").actual ≈ 1.0 && get_source_length(g, "w").actual ≈ 1.0
+    @test get_source_length(g, "v").actual ≈ 0.95
+    create_rectangular_loop_source!(g, 0.1, 0.05, 0.3, 0.25, 0.45, DirZ(); name = "r")   # corners on nodes
+    @test all(get_source_length(g, "r").sides.actual .≈ (0.25, 0.45))
+    # the three axes of a circle on the graded grid add up to the occupied edges
+    create_circular_loop_source!(g, 0.3, 0.3, 0.3, 0.1, DirZ(); name = "c")
+    J = get_source(g, "c")
+    occupied = sum(abs(J[p]) * (g.edges_u, g.edges_v, g.edges_w)[(p - 1) ÷ g.Np + 1][
+                   ((p - 1) % g.Np % g.Nu, (p - 1) % g.Np ÷ g.Nu % g.Nv, (p - 1) % g.Np ÷ (g.Nu * g.Nv))[(p - 1) ÷ g.Np + 1] + 1]
+                   for p in findall(!iszero, J))
+    @test get_source_length(g, "c").actual ≈ occupied
+end
+
+@testset "circular loop collapsing onto its centre line" begin
+    # on a grid too coarse to resolve the loop on one side, the crossing edges fall on the
+    # centre line itself; the direction of each edge follows from the side the inside is
+    # on, so the loop still closes (the old rule by position gave both columns one sign)
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    coarse = [0.1, 0.2, 0.05, 0.15, 0.3, 0.2]                            # nodes 0.3 and 0.35 around cu = 0.3
+    fine = fill(0.05, 20)
+    for (edges, normal) in (((coarse, fine, fill(0.1, 10)), DirZ()), ((fill(0.1, 10), coarse, fine), DirX()),
+                            ((coarse, fill(0.1, 10), fine), DirY()))
+        d = create_domain(edges...)
+        quiet(() -> create_circular_loop_source!(d, 0.3, 0.3, 0.3, 0.1, normal; name = "c"))
+        J = get_source(d, "c")
+        @test count(!iszero, J) == 10
+        @test iszero(get_divergence(d, Dual()) * J)
+    end
+    # DirZ: the column at u = 0.3 m (the near side) runs −v, the one at 0.35 m +v
+    d = create_domain(coarse, fine, fill(0.1, 10))
+    quiet(() -> create_circular_loop_source!(d, 0.3, 0.3, 0.3, 0.1, DirZ(); name = "c"))
+    J = get_source(d, "c")
+    v_edge(i, j) = d.Np + i + (j - 1) * d.Nu + (4 - 1) * d.Nu * d.Nv             # node (i, j, k = 4): w = 0.3 m
+    @test all(J[v_edge(3, j)] == -1.0 for j in 5:8) && all(J[v_edge(4, j)] == 1.0 for j in 5:8)
+    # and a loop resolved on a graded grid is closed as before
+    g = create_domain(repeat([0.04, 0.06], 10), [fill(0.05, 10); fill(0.025, 20)], fill(0.05, 20))
+    create_circular_loop_source!(g, 0.5, 0.5, 0.5, 0.2, DirZ(); name = "c")
+    @test count(!iszero, get_source(g, "c")) > 30 && iszero(get_divergence(g, Dual()) * get_source(g, "c"))
+end
+
+@testset "circular loop reaching its lower limit" begin
+    # u − R = nodes[1]: the cells of the first row lie inside, so the edges on the first
+    # node line belong to the loop (they used to be left out, leaving the loop open)
+    g = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    for (a, normal) in enumerate((DirX(), DirY(), DirZ()))
+        centre = ntuple(d -> d == a ? 0.5 : 0.4, 3)                  # 0.4 ± 0.4 = nodes[1] … nodes[end-2]
+        J = @test_logs get_source(g, create_circular_loop_source!(g, centre..., 0.4, normal))
+        @test iszero(get_divergence(g, Dual()) * J)
+        on_first_line = [t for t in (_wire_ijk(g, p) for p in findall(!iszero, J)) if
+                         any(d -> d != a && t[d + 1] == 1, 1:3)]
+        @test !isempty(on_first_line)
+    end
+end
+
+@testset "every accepted circular loop is closed" begin
+    # pseudo-random graded grids, centres and radii over the whole accepted range, every
+    # other loop exactly on its lower limit; no Random dependency
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    s = 11
+    rnd() = (s = mod(1103515245 * s + 12345, 2^31); s / 2^31)
+    for trial in 1:60
+        g = create_domain(([0.02 + 0.1 * rnd() for _ in 1:12] for _ in 1:3)...)
+        nodes = (g.nodes_u, g.nodes_v, g.nodes_w)
+        a = 1 + trial % 3
+        b, c = filter(!=(a), (1, 2, 3))
+        lo, hi = ntuple(d -> nodes[d][1], 3), ntuple(d -> nodes[d][end-2], 3)
+        R = (0.05 + 0.45 * rnd()) * min(hi[b] - lo[b], hi[c] - lo[c]) / 2
+        centre = ntuple(3) do d
+            d == a && return lo[d] + rnd() * (hi[d] - lo[d])
+            d == b && iseven(trial) && return lo[d] + R               # on the lower limit
+            return lo[d] + R + rnd() * (hi[d] - lo[d] - 2R)
+        end
+        J = quiet(() -> get_source(g, create_circular_loop_source!(g, centre..., R,
+                                                                    (DirX(), DirY(), DirZ())[a])))
+        @test iszero(get_divergence(g, Dual()) * J)
+    end
+end
+
+@testset "loops need three nodes in every direction" begin
+    # they lie within nodes[1] … nodes[end-2], which is empty on two nodes
+    thin = create_domain([1.0, 1.0, 0.1], [0.1, 0.1, 0.1])            # one cell along w
+    @test_throws "at least 3 nodes in every direction, but the grid has 2 in w" create_circular_loop_source!(thin, 0.5, 0.5, 0.0, 0.2, DirZ())
+    @test_throws "at least 3 nodes" create_rectangular_loop_source!(thin, 0.2, 0.2, 0.0, 0.3, 0.3, DirZ())
+    @test isempty(thin._history.steps)
+end
+
+@testset "the dual divergence without assembling it" begin
+    # the closure checks of the sources compute S̃J from their edges directly; it equals
+    # the matrix, at the nodes the edges touch, and is zero elsewhere
+    g = create_domain([0.1, 0.3, 0.05, 0.2], [0.2, 0.05, 0.1], [0.4, 0.1, 0.2, 0.2, 0.05])
+    v = [sin(1.7p) for p in 1:3g.Np]
+    div = FITToolbox._dual_divergence(g, (p => v[p] for p in 1:3g.Np))
+    @test [get(div, p, 0.0) for p in 1:g.Np] ≈ get_divergence(g, Dual()) * v
+    few = [7 => 1.0, g.Np + 12 => -2.0, 2g.Np + 3 => 0.5]                 # a u-, v- and w-edge
+    w = zeros(3g.Np); foreach(((p, x),) -> w[p] = x, few)
+    div = FITToolbox._dual_divergence(g, few)
+    @test length(div) == 6                                               # their two nodes each
+    @test [get(div, p, 0.0) for p in 1:g.Np] == get_divergence(g, Dual()) * w
+end
+
+# A path is a chain: edge m runs from nodes[m] to nodes[m+1], along its axis for +1
+function _path_is_chain(d, p)
+    length(p.nodes) == length(p.edges) + 1 || return false
+    M = (1, d.Nu, d.Nu * d.Nv)                                        # node steps along u, v, w
+    return all(eachindex(p.edges)) do m
+        lower = mod1(p.edges[m], d.Np)                                 # the edge starts at its lower node
+        upper = lower + M[(p.edges[m] - 1) ÷ d.Np + 1]
+        (p.nodes[m], p.nodes[m+1]) == (p.signs[m] > 0 ? (lower, upper) : (upper, lower))
+    end
+end
+
+# The edges of a path with their signs, as a vector in the edge layout
+_path_vector(d, p) = (v = zeros(3 * d.Np); v[p.edges] .= p.signs; v)
+
+@testset "get_source_path" begin
+    g = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    node(i, j, k) = i + (j-1)*g.Nu + (k-1)*g.Nu*g.Nv
+    wire!(d, name, pts; kw...) = quiet(() -> create_polyline_source!(d, pts; name, kw...))
+
+    # along an axis: the edges in order, along their axis or against it
+    wire!(g, "forth", [(0.1, 0.2, 0.9), (0.4, 0.2, 0.9)])
+    wire!(g, "back", [(0.4, 0.3, 0.9), (0.1, 0.3, 0.9)])
+    p = get_source_path(g, "forth")
+    @test p.nodes == [node(i, 3, 10) for i in 2:5] && p.signs == [1.0, 1.0, 1.0] && p.lengths ≈ fill(0.1, 3)
+    @test _path_is_chain(g, p) && p == get_source_path(g, 1)
+    q = get_source_path(g, "back")
+    @test q.nodes == [node(i, 4, 10) for i in 5:-1:2] && q.signs == [-1.0, -1.0, -1.0]
+
+    # a diagonal through all three axes: a chain over the edges of the source vector,
+    # from one end of get_source_ends to the other, as long as get_source_length says
+    wire!(g, "diagonal", [(0.1, 0.2, 0.3), (0.8, 0.6, 0.9)]; current = 2 - 1im)
+    p = get_source_path(g, "diagonal")
+    @test _path_is_chain(g, p) && length(p.edges) == 7 + 4 + 6
+    @test (2 - 1im) .* _path_vector(g, p) == get_source(g, "diagonal")
+    ends = get_source_ends(g, "diagonal")
+    @test (p.nodes[1], p.nodes[end]) == (ends.start_node, ends.stop_node)
+    @test sum(p.lengths) ≈ get_source_length(g, "diagonal").actual
+
+    # a sharp corner: the second piece starts back over the end of the first, 3 edges
+    # there and back; these steps cancel, so the path has the 5 edges of the source vector
+    # rather than the 11 steps walked, and no dead end
+    wire!(g, "corner", [(0.1, 0.5, 0.5), (0.6, 0.5, 0.5), (0.1, 0.6, 0.5)])
+    p = @test_logs (:warn, r"cancels on the grid") get_source_path(g, "corner")
+    @test _path_is_chain(g, p) && _path_vector(g, p) == get_source(g, "corner")
+    @test p.nodes == [node(2, 6, 6), node(3, 6, 6), node(4, 6, 6), node(4, 7, 6), node(3, 7, 6), node(2, 7, 6)]
+
+    # closed: back to the first node. Where the closing step runs back along the first
+    # edge, both are left out and the path starts at the next node.
+    wire!(g, "triangle", [(0.2, 0.2, 0.3), (0.8, 0.2, 0.3), (0.5, 0.7, 0.3)]; closed = true)
+    p = @test_logs (:warn, r"8 % of its planned length") get_source_path(g, "triangle")   # its apex
+    @test _path_is_chain(g, p) && p.nodes[1] == p.nodes[end] == node(3, 3, 4)
+    @test _path_vector(g, p) == get_source(g, "triangle")
+    wire!(g, "spur", [(0.3, 0.5, 0.1), (0.6, 0.5, 0.1), (0.6, 0.7, 0.1), (0.4, 0.7, 0.1), (0.4, 0.5, 0.1)];
+          closed = true)
+    p = @test_logs (:warn, r"20 % of its planned length") get_source_path(g, "spur")   # its first edge
+    @test _path_is_chain(g, p) && p.nodes[1] == p.nodes[end] == node(5, 6, 2)   # (0.4, 0.5), not (0.3, 0.5)
+    @test length(p.edges) == 8 && _path_vector(g, p) == get_source(g, "spur")
+
+    # a graded grid: each length is the distance between the two nodes of its edge
+    e = create_domain([0.1, 0.3, 0.05, 0.2, 0.15], [0.2, 0.05, 0.1, 0.3, 0.25], [0.4, 0.1, 0.2, 0.2, 0.05])
+    wire!(e, "graded", [(0.05, 0.1, 0.3), (0.7, 0.85, 0.9)])
+    p = get_source_path(e, "graded")
+    @test _path_is_chain(e, p) && _path_vector(e, p) == get_source(e, "graded")
+    at(q) = get_position_of_index(e, PrimalNode(), q)[1:3]
+    @test p.lengths ≈ [hypot((at(p.nodes[m+1]) .- at(p.nodes[m]))...) for m in eachindex(p.edges)]
+    @test sum(p.lengths) ≈ get_source_length(e, "graded").actual
+
+    # running along an edge twice has no single order: an error, while get_source works
+    wire!(g, "overlap", [(0.1, 0.5, 0.7), (0.5, 0.5, 0.7), (0.5, 0.6, 0.7), (0.2, 0.6, 0.7),
+                         (0.2, 0.5, 0.7), (0.4, 0.5, 0.7)])
+    @test_throws "runs along an edge twice" get_source_path(g, "overlap")
+    @test maximum(get_source(g, "overlap")) == 2
+
+    # only for polylines
+    create_rectangular_loop_source!(g, 0.2, 0.2, 0.6, 0.3, 0.3, DirZ(); name = "frame")
+    @test_throws "not a polyline source" get_source_path(g, "frame")
+    @test_throws "no object named" get_source_path(g, "nothing")
+end
+
+@testset "get_source_path: pieces and planned lengths" begin
+    g = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    # An L: 0.4 m along u, then 0.3 m along u and v at 45°, a staircase of 0.6 m. Piece by
+    # piece each arm keeps its length; one factor for the whole wire, planned/actual, would
+    # make the straight arm 17 % short and the diagonal one 17 % long.
+    quiet(() -> create_polyline_source!(g, [(0.1, 0.2, 0.5), (0.5, 0.2, 0.5), (0.8, 0.5, 0.5)]; name = "L"))
+    p = get_source_path(g, "L")
+    arm1, arm2 = p.pieces .== 1, p.pieces .== 2
+    @test p.pieces == [fill(1, 4); fill(2, 6)] && sum(p.lengths[arm2]) ≈ 0.6
+    @test p.planned_lengths[arm1] ≈ p.lengths[arm1]                          # along an axis: as on the grid
+    @test all(p.planned_lengths[arm2] .≈ 0.1 / sqrt(2))                     # at 45°: 1/√2 of each edge
+    @test sum(p.planned_lengths[arm1]) ≈ 0.4 && sum(p.planned_lengths[arm2]) ≈ hypot(0.3, 0.3)
+    len = get_source_length(g, "L")
+    @test sum(p.planned_lengths) ≈ len.planned && sum(p.lengths) ≈ len.actual
+    @test !(sum(p.lengths[arm1]) * len.planned / len.actual ≈ 0.4)          # what one factor would give
+
+    # A hook: the leg back runs 2 cm beside the first one, snaps onto it and cancels with
+    # its end, leaving 0.5 m of the planned 1.1 m on the grid. What is left keeps its own
+    # length, 0.1 m per edge, instead of being stretched 2.2-fold to make up for the hook,
+    # and the loss is reported.
+    quiet(() -> create_polyline_source!(g, [(0.1, 0.5, 0.5), (0.9, 0.5, 0.5), (0.6, 0.52, 0.5)]; name = "hook"))
+    p = @test_logs (:warn, r"\"hook\": 55 % of its planned length cancels on the grid") get_source_path(g, "hook")
+    @test p.pieces == fill(1, 5) && p.planned_lengths ≈ p.lengths ≈ fill(0.1, 5)
+    @test sum(p.planned_lengths) / get_source_length(g, "hook").planned ≈ 0.5 / (0.8 + hypot(0.3, 0.02))
+
+    # A sharp corner: the second piece starts back over the end of the first. The first
+    # loses 3 of its 5 edges with their share; the second keeps the share of its 3 edges
+    # left out of the 6 it walked.
+    quiet(() -> create_polyline_source!(g, [(0.1, 0.5, 0.3), (0.6, 0.5, 0.3), (0.1, 0.6, 0.3)]; name = "corner"))
+    p = @test_logs (:warn, r"55 % of its planned length") get_source_path(g, "corner")
+    @test p.pieces == [1, 1, 2, 2, 2] && p.planned_lengths[1:2] ≈ [0.1, 0.1]
+    @test p.planned_lengths[3:5] ≈ fill(0.1 * hypot(0.5, 0.1) / 0.6, 3)
+
+    # A triangle's apex, sharper than the grid can follow: the staircase steps up to it and
+    # straight back, so the edge below the apex cancels and the apex is cut off, with the
+    # share of both steps
+    create_polyline_source!(g, [(0.2, 0.2, 0.7), (0.8, 0.2, 0.7), (0.5, 0.7, 0.7)]; closed = true, name = "triangle")
+    p = @test_logs (:warn, r"8 % of its planned length") get_source_path(g, "triangle")
+    @test get_index_entity(g, PrimalNode(), 0.5, 0.7, 0.7) ∉ p.nodes
+    @test sum(p.planned_lengths) ≈ 0.6 + 2 * hypot(0.3, 0.5) - 2 * 0.1 * hypot(0.3, 0.5) / 0.8
+
+    # closed with corners of 90° and 135°: nothing is lost; the closing piece, back to the
+    # first point, is the last
+    create_polyline_source!(g, [(0.2, 0.2, 0.4), (0.8, 0.2, 0.4), (0.8, 0.5, 0.4), (0.6, 0.7, 0.4),
+                                (0.2, 0.7, 0.4)]; closed = true, name = "chamfered")
+    p = @test_logs get_source_path(g, "chamfered")
+    @test issorted(p.pieces) && extrema(p.pieces) == (1, 5)
+    @test sum(p.planned_lengths) ≈ get_source_length(g, "chamfered").planned
+
+    # A circle drawn with 3000 points, about 16 to a cell: most pieces have both points on
+    # one node and walk no edge; their length goes to the next piece that does, so the
+    # circle keeps its length, and its staircase, 4/π as long, stands for it.
+    f = create_domain([1.0, 1.0, 1.0], fill(0.01, 3))
+    circle = [(0.5 + 0.3cos(t), 0.5 + 0.3sin(t), 0.5) for t in range(0, 2π; length = 3001)[1:end-1]]
+    create_polyline_source!(f, circle; closed = true, name = "circle")
+    p = @test_logs get_source_path(f, "circle")
+    planned = get_source_length(f, "circle").planned
+    @test planned ≈ 2π * 0.3 rtol = 1e-5
+    @test sum(p.planned_lengths) ≈ planned
+    @test sum(p.planned_lengths) / sum(p.lengths) ≈ π / 4 rtol = 1e-3
+    @test all(>(0), p.planned_lengths)
+end
+
+@testset "polyline sources: memory grows with the path, not with the grid" begin
+    # creating a polyline, its path and its length are checked on its walk alone; only
+    # get_source builds a vector of the whole grid, and only that one (24 MiB here)
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    d = create_domain([1.0, 1.0, 1.0], fill(0.01, 3))                  # 101³ ≈ 1.03 M nodes
+    pts = [(0.5, 0.5, 0.45), (0.5, 0.52, 0.55)]
+    create!(name) = quiet(() -> create_polyline_source!(d, pts; name))
+    create!("warm"); get_source_path(d, "warm"); get_source_length(d, "warm"); get_source(d, "warm")
+    grid_vector = 3 * d.Np * sizeof(Float64)
+    @test @allocated(create!("dipole")) < 2^20
+    @test @allocated(get_source_path(d, "dipole")) < 2^20
+    @test @allocated(get_source_length(d, "dipole")) < 2^20
+    @test grid_vector <= @allocated(get_source(d, "dipole")) < grid_vector + 2^20
+    # and a point charge is checked on its node
+    charge!(name) = create_electric_charge!(d, 0.3, 0.3, 0.3; charge = 1e-9, name)
+    charge!("q0")
+    @test @allocated(charge!("q1")) < 2^20
+end
+
+@testset "loop sources: memory grows with the loop, not with the grid" begin
+    # as for the polylines: only get_source builds a vector of the whole grid (24 MiB here)
+    d = create_domain([1.0, 1.0, 1.0], fill(0.01, 3))                  # 101³ ≈ 1.03 M nodes
+    grid_vector = 3 * d.Np * sizeof(Float64)
+    circle!(name) = create_circular_loop_source!(d, 0.5, 0.5, 0.5, 0.2, DirY(); name)
+    rectangle!(name) = create_rectangular_loop_source!(d, 0.2, 0.3, 0.6, 0.4, 0.3, DirZ(); name)
+    for name in ("c0", "r0")
+        name == "c0" ? circle!(name) : rectangle!(name)
+        get_source_length(d, name); get_source(d, name)
+    end
+    FITToolbox._check_sources(d)
+    for (create!, name) in ((circle!, "coil"), (rectangle!, "frame"))
+        @test @allocated(create!(name)) < 2^20
+        @test @allocated(get_source_length(d, name)) < 2^20
+        @test grid_vector <= @allocated(get_source(d, name)) < grid_vector + 2^20
+    end
+    # the check of change_resolution and load_domain, here with four loops
+    @test @allocated(FITToolbox._check_sources(d)) < 2^20
+    # 100 circles, as for a coil of many turns, with the checks of each
+    @test @allocated(for k in 1:100
+        create_circular_loop_source!(d, 0.5, 0.5, 0.2 + 0.006k, 0.2, DirZ(); name = "turn$k")
+    end) < 2^24
+    @test count(e -> e.object isa FITToolbox.CircularLoop, list_objects(d)) == 102
 end

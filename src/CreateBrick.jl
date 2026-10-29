@@ -11,9 +11,41 @@ end
 _describe_geometry(b::Brick) = "origin=$(_short(b.origin)) lengths=$(_short(b.lengths))"
 _describe_material(b::Brick) = _describe_material(b.material)
 
+"""
+    create_brick!(domain, u_o, v_o, w_o, u_length, v_length, w_length;
+                  units = "m", σ = 0.0, ε_r = 1.0, μ_r = 1.0, name = "", color = nothing)
+        -> obj_id
+
+Add a solid brick, a box with its sides along the axes, to `domain` and return its
+`obj_id`. `(u_o, v_o, w_o)` is its corner with the smallest coordinates; from there it
+extends by `u_length`, `v_length` and `w_length`. All lengths are given in `units`. The
+object is recorded in the history: `list_objects` shows it, and `remove_object!` and
+`undo!` take it away again.
+
+Each face snaps to the nearest node plane, halfway between two to the lower one, as the
+loop sources and charges do, and every cell between the faces takes the material: the
+brick is exact on the grid wherever its faces fall on nodes.
+
+With `color = "background"` the brick is a cut-out: it takes the background material of
+the domain (`σ`, `ε_r` and `μ_r` are ignored), e.g. to cut a window into an earlier
+object, and `view_domain` shows it as such.
+
+Throws an `ArgumentError` if a length is not positive, if the corner lies outside the
+domain, if the brick has no cell along an axis on the grid (less than about half a cell
+of it lies in the domain), or if `name` is already used; nothing is recorded then.
+Warns if the brick reaches beyond the domain: like the other solids, it is clipped there.
+
+# Example
+
+```julia
+# a copper plate, 80 cm × 80 cm × 2 cm, its corner at (10, 10, 20) cm
+create_brick!(domain, 10, 10, 20, 80, 80, 2; units = "cm", σ = 5.8e7, name = "plate",
+              color = "copper")
+```
+"""
 function create_brick!(domain::FITDomain, u_o, v_o, w_o, u_length, v_length, w_length;
                        units="m", σ=0.0, ε_r=1.0, μ_r=1.0,
-                       name::String="", color::Union{Nothing,String}=nothing)
+                       name::AbstractString="", color::Union{Nothing,AbstractString}=nothing)
     unitToMeter = check_units(units)
     brick = Brick((u_o*unitToMeter, v_o*unitToMeter, w_o*unitToMeter),
                   (u_length*unitToMeter, v_length*unitToMeter, w_length*unitToMeter),
@@ -45,40 +77,40 @@ function _apply!(domain::FITDomain, brick::Brick)
     Nodes_V = domain.nodes_v
     Nodes_W = domain.nodes_w
 
-    # Check the requested extent against the grid before snapping. After
-    # CheckClosest the indices are clamped into range, so testing them cannot
-    # detect a brick that lies outside.
-    (_within(u_min, Nodes_U) && _within(u_max, Nodes_U) &&
-     _within(v_min, Nodes_V) && _within(v_max, Nodes_V) &&
-     _within(w_min, Nodes_W) && _within(w_max, Nodes_W)) ||
-        throw(ArgumentError("brick extends beyond the domain: requested u $(u_min)–$(u_max), \
-                             v $(v_min)–$(v_max), w $(w_min)–$(w_max) m"))
-    
-    function CheckClosest(index, nodes, pos)
-        Nmax = length(nodes)
-        index = min(index, Nmax)  # clamp if beyond last node
-        if index > 1 && abs(nodes[index-1] - pos) < abs(nodes[index] - pos)
-            index -= 1
-        end
-        return index
-    end
+    all(>(0), brick.lengths) ||
+        throw(ArgumentError("brick lengths must be positive, got $(brick.lengths) m"))
+    # The corner must lie inside the grid, as the centre of a sphere must; otherwise the
+    # brick is missed entirely or only partly captured, and without this check that goes
+    # unnoticed. Check it before snapping: the snapped indices are clamped into range,
+    # so testing them cannot detect a brick that lies outside.
+    (_within(u_min, Nodes_U) && _within(v_min, Nodes_V) && _within(w_min, Nodes_W)) ||
+        throw(ArgumentError("brick corner $(brick.origin) m lies outside the domain"))
 
-    i_min = CheckClosest(searchsortedfirst(Nodes_U, u_min), Nodes_U, u_min)
-    i_max = CheckClosest(searchsortedfirst(Nodes_U, u_max), Nodes_U, u_max)
-    j_min = CheckClosest(searchsortedfirst(Nodes_V, v_min), Nodes_V, v_min)
-    j_max = CheckClosest(searchsortedfirst(Nodes_V, v_max), Nodes_V, v_max)
-    k_min = CheckClosest(searchsortedfirst(Nodes_W, w_min), Nodes_W, w_min)
-    k_max = CheckClosest(searchsortedfirst(Nodes_W, w_max), Nodes_W, w_max)
+    # Each face snaps to the nearest node, as the corners of the loops and the points of
+    # the polylines and charges do: halfway between two nodes, to the lower one. A face
+    # beyond the last node snaps to it, which clips the brick there.
+    i_min, i_max = _find_index(Nodes_U, u_min), _find_index(Nodes_U, u_max)
+    j_min, j_max = _find_index(Nodes_V, v_min), _find_index(Nodes_V, v_max)
+    k_min, k_max = _find_index(Nodes_W, w_min), _find_index(Nodes_W, w_max)
 
+    # thinner than about half a cell, or clipped to less than that at the boundary
     i_min < i_max ||
-        throw(ArgumentError("brick has zero extent in u after snapping to the grid — \
-                             u_length = $(brick.lengths[1]) m is smaller than one cell"))
+        throw(ArgumentError("brick has zero extent in u after snapping to the grid: less than \
+                             about half a cell of u = $(_short(u_min)) … $(_short(u_max)) m \
+                             lies in the domain"))
     j_min < j_max ||
-        throw(ArgumentError("brick has zero extent in v after snapping to the grid — \
-                             v_length = $(brick.lengths[2]) m is smaller than one cell"))
+        throw(ArgumentError("brick has zero extent in v after snapping to the grid: less than \
+                             about half a cell of v = $(_short(v_min)) … $(_short(v_max)) m \
+                             lies in the domain"))
     k_min < k_max ||
-        throw(ArgumentError("brick has zero extent in w after snapping to the grid — \
-                             w_length = $(brick.lengths[3]) m is smaller than one cell"))
+        throw(ArgumentError("brick has zero extent in w after snapping to the grid: less than \
+                             about half a cell of w = $(_short(w_min)) … $(_short(w_max)) m \
+                             lies in the domain"))
+
+    # Reaching past the boundary clips the brick. That can be intentional — a plate
+    # through the whole domain — so warn rather than throw, as for the other solids.
+    (_within(u_max, Nodes_U) && _within(v_max, Nodes_V) && _within(w_max, Nodes_W)) ||
+        @warn "brick extends beyond the domain and will be clipped" origin=brick.origin lengths=brick.lengths
 
     Material_distribution = domain.material
 

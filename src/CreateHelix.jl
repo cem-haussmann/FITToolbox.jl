@@ -69,7 +69,7 @@ get_helix_ends(domain, "coil")       # where to attach the leads
 function create_helix!(domain::FITDomain, u_b, v_b, w_b, R, r, pitch, turns, axis::Direction;
                        start_angle::Real=0, left_handed::Bool=false, units="m",
                        σ=0.0, ε_r=1.0, μ_r=1.0,
-                       name::String="", color::Union{Nothing,String}=nothing)
+                       name::AbstractString="", color::Union{Nothing,AbstractString}=nothing)
     unitToMeter = check_units(units)
     helix = Helix((u_b*unitToMeter, v_b*unitToMeter, w_b*unitToMeter),
                   R*unitToMeter, r*unitToMeter, pitch*unitToMeter, turns, axis,
@@ -85,8 +85,9 @@ end
 
 The two end points of a helix from `create_helix!`, in m: the centres of its round ends,
 on the wire's centre line, where the wire starts and where it stops after its turns.
-A lead that starts at one of them is connected to the wire. Throws an `ArgumentError` if
-no such object exists or it is not a helix.
+A lead that starts at one of them is connected to the wire. The ends of a polyline source
+come from `get_source_ends` in the same form. Throws an `ArgumentError` if no such object
+exists or it is not a helix.
 """
 get_helix_ends(domain::FITDomain, name::AbstractString) =
     get_helix_ends(domain, _entry(domain, name).obj_id)
@@ -186,7 +187,6 @@ function _apply!(domain::FITDomain, hx::Helix)
         throw(ArgumentError("helix base $(hx.base) m lies outside the domain"))
 
     a = _axis_index(hx.axis)
-    b, c = _cyclic_axes(hx.axis)
     height = pitch * turns
 
     lo = ntuple(d -> d == a ? hx.base[d] - r : hx.base[d] - R - r, 3)
@@ -213,16 +213,18 @@ function _apply!(domain::FITDomain, hx::Helix)
 
     # k outermost for threading (stride Nu*Nv, so threads write far apart),
     # i innermost because md is contiguous in i.
+    # only the cells around the solid can be filled: scan those, not the whole grid
+    cells = _cell_ranges(domain, _extent(hx))
     filled = zeros(Int, Nw-1)
-    @threads for k in 1:Nw-1
+    @threads for k in cells[3]
         ww = (dw[k+1] - dw[k]) / 6.0
         w_samples = (dw[k] + ww, dw[k] + 3.0*ww, dw[k] + 5.0*ww)
 
-        @inbounds for j in 1:Nv-1
+        @inbounds for j in cells[2]
             vw = (dv[j+1] - dv[j]) / 6.0
             v_samples = (dv[j] + vw, dv[j] + 3.0*vw, dv[j] + 5.0*vw)
 
-            for i in 1:Nu-1
+            for i in cells[1]
                 uw = (du[i+1] - du[i]) / 6.0
                 u_samples = (du[i] + uw, du[i] + 3.0*uw, du[i] + 5.0*uw)
 

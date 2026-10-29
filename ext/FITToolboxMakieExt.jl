@@ -9,7 +9,7 @@ module FITToolboxMakieExt
 
 using FITToolbox
 using FITToolbox: DirX, DirY, DirZ, Direction, Primal, PrimalNode, PrimalEdge,
-                  check_units, get_gradient, interpolate
+                  check_units, get_gradient, interpolate, _axis_index
 using Makie
 
 # For a cut with normal `n`, return everything that differs between the three

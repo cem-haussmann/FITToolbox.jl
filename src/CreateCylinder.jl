@@ -52,7 +52,7 @@ create_cylinder!(domain, 50, 50, 10, 1, 30, DirZ(); units = "cm", σ = 5.8e7,
 """
 function create_cylinder!(domain::FITDomain, u_b, v_b, w_b, radius, height, axis::Direction;
                           units="m", σ=0.0, ε_r=1.0, μ_r=1.0,
-                          name::String="", color::Union{Nothing,String}=nothing)
+                          name::AbstractString="", color::Union{Nothing,AbstractString}=nothing)
     unitToMeter = check_units(units)
     cylinder = Cylinder((u_b*unitToMeter, v_b*unitToMeter, w_b*unitToMeter),
                         radius*unitToMeter, height*unitToMeter, axis,
@@ -119,16 +119,18 @@ function _apply!(domain::FITDomain, cyl::Cylinder)
 
     # k outermost for threading (stride Nu*Nv, so threads write far apart),
     # i innermost because md is contiguous in i.
+    # only the cells around the solid can be filled: scan those, not the whole grid
+    cells = _cell_ranges(domain, _extent(cyl))
     filled = zeros(Int, Nw-1)
-    @threads for k in 1:Nw-1
+    @threads for k in cells[3]
         ww = (dw[k+1] - dw[k]) / 6.0
         w_samples = (dw[k] + ww, dw[k] + 3.0*ww, dw[k] + 5.0*ww)
 
-        @inbounds for j in 1:Nv-1
+        @inbounds for j in cells[2]
             vw = (dv[j+1] - dv[j]) / 6.0
             v_samples = (dv[j] + vw, dv[j] + 3.0*vw, dv[j] + 5.0*vw)
 
-            for i in 1:Nu-1
+            for i in cells[1]
                 uw = (du[i+1] - du[i]) / 6.0
                 u_samples = (du[i] + uw, du[i] + 3.0*uw, du[i] + 5.0*uw)
 

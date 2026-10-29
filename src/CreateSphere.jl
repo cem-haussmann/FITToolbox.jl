@@ -11,11 +11,40 @@ end
 _describe_geometry(s::Sphere) = "center=$(_short(s.center)) radius=$(_short(s.radius))"
 _describe_material(s::Sphere) = _describe_material(s.material)
 
-function create_sphere!(domain::FITDomain, u_o, v_o, w_o, radius;
+"""
+    create_sphere!(domain, u_c, v_c, w_c, radius;
+                   units = "m", σ = 0.0, ε_r = 1.0, μ_r = 1.0, name = "", color = nothing)
+        -> obj_id
+
+Add a solid sphere with its centre at `(u_c, v_c, w_c)` to `domain` and return its
+`obj_id`. All lengths are given in `units`. The object is recorded in the history:
+`list_objects` shows it, and `remove_object!` and `undo!` take it away again.
+
+A cell takes the material when at least half of it lies inside the sphere, judged by
+27 sample points per cell (14 or more inside), so on the grid the sphere becomes a
+staircase whose volume approaches `4π/3 radius³` as the grid is refined.
+`create_cylinder!`, `create_torus!` and `create_helix!` use the same rule.
+
+With `color = "background"` the sphere is a cut-out: it takes the background material of
+the domain (`σ`, `ε_r` and `μ_r` are ignored), e.g. to cut a hole into an earlier
+object, and `view_domain` shows it as such.
+
+Throws an `ArgumentError` if `radius` is not positive, if the centre lies outside the
+domain, or if `name` is already used; nothing is recorded then. Warns if the sphere
+reaches beyond the domain (it is clipped there) or fills no cell.
+
+# Example
+
+```julia
+# a dielectric sphere of 15 cm radius in the middle of a 1 m domain
+create_sphere!(domain, 50, 50, 50, 15; units = "cm", ε_r = 4.0, name = "ball")
+```
+"""
+function create_sphere!(domain::FITDomain, u_c, v_c, w_c, radius;
                         units="m", σ=0.0, ε_r=1.0, μ_r=1.0,
-                        name::String="", color::Union{Nothing,String}=nothing)
+                        name::AbstractString="", color::Union{Nothing,AbstractString}=nothing)
     unitToMeter = check_units(units)
-    sphere = Sphere((u_o*unitToMeter, v_o*unitToMeter, w_o*unitToMeter),
+    sphere = Sphere((u_c*unitToMeter, v_c*unitToMeter, w_c*unitToMeter),
                     radius*unitToMeter,
                     _solid_material(domain, σ, ε_r, μ_r, color))
     name = _resolve_name(domain, name)
@@ -65,16 +94,18 @@ function _apply!(domain::FITDomain, sphere::Sphere)
     # k outermost for threading (stride Nu*Nv, so threads write far apart),
     # i innermost because md is contiguous in i.
     
-    filled = zeros(Int, Nw-1)  
-    @threads for k in 1:Nw-1
+    # only the cells around the solid can be filled: scan those, not the whole grid
+    cells = _cell_ranges(domain, _extent(sphere))
+    filled = zeros(Int, Nw-1)
+    @threads for k in cells[3]
         ww = (dw[k+1] - dw[k]) / 6.0
         w_samples = (dw[k] + ww, dw[k] + 3.0*ww, dw[k] + 5.0*ww)
 
-        @inbounds for j in 1:Nv-1
+        @inbounds for j in cells[2]
             vw = (dv[j+1] - dv[j]) / 6.0
             v_samples = (dv[j] + vw, dv[j] + 3.0*vw, dv[j] + 5.0*vw)
 
-            for i in 1:Nu-1
+            for i in cells[1]
                 uw = (du[i+1] - du[i]) / 6.0
                 u_samples = (du[i] + uw, du[i] + 3.0*uw, du[i] + 5.0*uw)
 

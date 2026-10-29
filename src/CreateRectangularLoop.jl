@@ -54,7 +54,8 @@ Throws an `ArgumentError` if a side length is not positive, if a side becomes ze
 the grid (shorter than about half a cell), if the plane lies outside
 `nodes[1] … nodes[end-2]` along the normal, if the rectangle does not fit within
 `nodes[1] … nodes[end-2]` in the plane (the same gap to the boundary as for
-`create_circular_loop_source!`), or if `name` is already used. Nothing is recorded then.
+`create_circular_loop_source!`), if the grid has fewer than three nodes in a direction,
+or if `name` is already used. Nothing is recorded then.
 
 # Example
 
@@ -67,12 +68,12 @@ J = get_source(domain, "frame")
 """
 function create_rectangular_loop_source!(domain::FITDomain, u_o, v_o, w_o,
                                          length_1::Real, length_2::Real, normal::Direction;
-                                         units="m", current=1.0, name::String="")
+                                         units="m", current=1.0, name::AbstractString="")
     unitToMeter = check_units(units)
     name = _resolve_name(domain, name)
     loop = RectangularLoop((u_o*unitToMeter, v_o*unitToMeter, w_o*unitToMeter),
                            (length_1*unitToMeter, length_2*unitToMeter), normal, current)
-    _discretize_source(domain, loop)     # throws on invalid input, before anything is recorded
+    _check_source(domain, loop)          # throws on invalid input, before anything is recorded
     return _record_create!(domain, loop; name)
 end
 
@@ -85,7 +86,8 @@ function create_rectangular_loop_source!(domain::FITDomain, u_o, v_o, w_o,
                                            normal; kwargs...)
 end
 
-function _unit_source(config::FITDomain, r::RectangularLoop)
+# the edges along its sides with their current per unit (see _discretize_source)
+function _unit_edges(config::FITDomain, r::RectangularLoop)
     nodes = (config.nodes_u, config.nodes_v, config.nodes_w)
     names = ("u", "v", "w")
     a = _axis_index(r.normal)
@@ -94,6 +96,7 @@ function _unit_source(config::FITDomain, r::RectangularLoop)
     all(>(0), r.lengths) ||
         throw(ArgumentError("side lengths must be positive, got $(r.lengths) m"))
     # The same gap to the boundary as for the circular loop: nodes[1] … nodes[end-2]
+    _check_loop_grid(config)
     inner(d, x) = _within(x, nodes[d], nodes[d][1], nodes[d][end-2])
     inner(a, r.origin[a]) ||
         throw(ArgumentError("loop plane lies outside the domain in $(names[a])-direction"))
@@ -115,10 +118,10 @@ function _unit_source(config::FITDomain, r::RectangularLoop)
     # +b along c = c0, +c along b = b1, −b along c = c1, −c along b = b0
     b, c = _cyclic_axes(r.normal)
     Nu, Nv, Np = config.Nu, config.Nv, config.Np
-    J = zeros(Float64, 3*Np)
+    net = Dict{Int,Float64}()
     function edge!(dir, ib, ic, value)
         ijk = ntuple(d -> d == a ? plane : d == b ? ib : ic, 3)
-        J[(dir - 1)*Np + ijk[1] + (ijk[2] - 1)*Nu + (ijk[3] - 1)*Nu*Nv] = value
+        net[(dir - 1)*Np + ijk[1] + (ijk[2] - 1)*Nu + (ijk[3] - 1)*Nu*Nv] = value
     end
     for m in lo[b]:hi[b]-1
         edge!(b, m, lo[c],  1.0)
@@ -129,11 +132,7 @@ function _unit_source(config::FITDomain, r::RectangularLoop)
         edge!(c, lo[b], m, -1.0)
     end
 
-    # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
-    # continuity, and the curl–curl system has no solution without it. True by
-    # construction; checked as for the circular loop.
-    residual = norm(get_divergence(config, Dual()) * J)
-    residual > 1e-12 * norm(J) &&
-        @warn "The rectangular loop is not divergence free" residual
-    return J
+    # closed by construction; checked as for the circular loop
+    _check_closed(config, net, "rectangular loop")
+    return net
 end
