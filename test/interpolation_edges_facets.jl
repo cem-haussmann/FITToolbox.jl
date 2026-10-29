@@ -16,6 +16,8 @@ using FITToolbox, Test
 const _IP = create_domain([1.0, 2.0, 0.5, 3.0], [2.0, 1.0, 1.5],
                           [0.5, 1.0, 1.0, 2.0, 0.75]; units = "m")
 
+_ip_node(d, i, j, k) = i + (j-1)*d.Nu + (k-1)*d.Nu*d.Nv
+
 # one linear function per component, all different
 const _IP_LINEAR = ((x, y, z) -> 2x + 3y - z + 1,
                     (x, y, z) -> -x + y + 4z,
@@ -39,13 +41,13 @@ _ip_layout(d, ::PrimalFacet) = (
     ((d.edges_u_center, d.nodes_v, d.edges_w_center), (i, j, k) -> d.primal_facets_v[i, k]),
     ((d.edges_u_center, d.edges_v_center, d.nodes_w), (i, j, k) -> d.primal_facets_w[i, j]))
 
-"""FIT vector of the linear field on `entity`: each value integrated, NaN on dead slots."""
-function _ip_integrated_field(d, entity)
+"""FIT vector of the field `f` on `entity`: each value integrated, NaN on dead slots."""
+function _ip_integrated_field(d, entity, f = _IP_LINEAR)
     v = fill(NaN, 3 * d.Np)
     for (c, ((X, Y, Z), measure)) in enumerate(_ip_layout(d, entity))
         for k in eachindex(Z), j in eachindex(Y), i in eachindex(X)
             p = (c-1) * d.Np + i + (j-1)*d.Nu + (k-1)*d.Nu*d.Nv
-            v[p] = _IP_LINEAR[c](X[i], Y[j], Z[k]) * measure(i, j, k)
+            v[p] = f[c](X[i], Y[j], Z[k]) * measure(i, j, k)
         end
     end
     return v
@@ -71,12 +73,83 @@ entities = (PrimalEdge(), DualFacet(), DualEdge(), PrimalFacet())
           collect(interpolate(d, entity, v, 2.9, 2.6, 2.2)) rtol = 1e-12
 end
 
+@testset "the outermost half cells: $(nameof(typeof(entity)))" for entity in entities
+    # beyond the first or last position of a component it is extrapolated from the
+    # outermost pair, exactly for a linear field, up to the corners of the domain; a dead
+    # slot (NaN) in the stencil would show
+    v = _ip_integrated_field(d, entity)
+    for (x, y, z) in ((0.1, 0.2, 0.1), (6.3, 4.4, 5.2), (0.2, 4.4, 2.0), (0.0, 0.0, 0.0), (6.5, 4.5, 5.25))
+        @test collect(interpolate(d, entity, v, x, y, z)) ≈
+              [f(x, y, z) for f in _IP_LINEAR] atol = 1e-12
+    end
+end
+
+@testset "volume quantities: a density" begin
+    # integrated over the cells: the density at the centre times the volume; divided by
+    # it again and interpolated, a linear density is reproduced, also in the outer half
+    # cells (NaN on the dead slots of the primal cells)
+    ρ(x, y, z) = 2x - y + 3z + 1
+    qd = vec([ρ(d.nodes_u[i], d.nodes_v[j], d.nodes_w[k]) *
+              d.dual_edges_u[i] * d.dual_edges_v[j] * d.dual_edges_w[k]
+              for i in 1:d.Nu, j in 1:d.Nv, k in 1:d.Nw])
+    qp = fill(NaN, d.Np)
+    for k in 1:d.Nw-1, j in 1:d.Nv-1, i in 1:d.Nu-1
+        qp[i + (j-1)*d.Nu + (k-1)*d.Nu*d.Nv] =
+            ρ(d.edges_u_center[i], d.edges_v_center[j], d.edges_w_center[k]) * d.edges_u[i] * d.edges_v[j] * d.edges_w[k]
+    end
+    for p in ((0.7, 1.3, 0.4), (2.9, 2.6, 2.2), (6.3, 4.4, 5.2), (0.0, 0.0, 0.0))
+        @test interpolate(d, DualVolume(), qd, p...) ≈ ρ(p...) atol = 1e-12
+        @test interpolate(d, PrimalVolume(), qp, p...) ≈ ρ(p...) atol = 1e-12
+    end
+    # a charge alone: its charge over the dual volume of its node, there
+    q = zeros(d.Np); q[_ip_node(d, 2, 3, 4)] = 1e-9
+    @test interpolate(d, DualVolume(), q, 1.0, 3.0, 2.5) ≈
+          1e-9 / (d.dual_edges_u[2] * d.dual_edges_v[3] * d.dual_edges_w[4])
+    @test isnan(@test_logs (:warn, r"outside of the domain") interpolate(d, DualVolume(), qd, -1.0, 2.0, 2.0))
+    @test_throws DimensionMismatch interpolate(d, PrimalVolume(), zeros(3d.Np), 1.0, 1.0, 1.0)
+end
+
+@testset "a domain one cell thick" begin
+    # one cell along w: what is centred in it has a single position along w and is
+    # constant there. A field constant along w is reproduced exactly; quantities on the
+    # nodes vary linearly between the two node planes.
+    t = create_domain([1.0, 2.0, 0.5, 3.0], [2.0, 1.0, 1.5], [0.3])
+    @test t.Nw == 2
+    flat = ((x, y, z) -> 2x + 3y + 1, (x, y, z) -> -x + y, (x, y, z) -> 5x - 2y)
+    for entity in entities
+        v = _ip_integrated_field(t, entity, flat)
+        for (x, y, z) in ((0.7, 1.3, 0.1), (5.9, 4.2, 0.3), (3.0, 2.0, 0.0))
+            @test collect(interpolate(t, entity, v, x, y, z)) ≈ [f(x, y, z) for f in flat] atol = 1e-12
+        end
+    end
+    g(x, y) = 2x - y
+    dn = fill(NaN, t.Np)
+    for j in 1:t.Nv-1, i in 1:t.Nu-1
+        dn[_ip_node(t, i, j, 1)] = g(t.edges_u_center[i], t.edges_v_center[j])
+    end
+    @test interpolate(t, DualNode(), dn, 2.9, 2.6, 0.27) ≈ g(2.9, 2.6) atol = 1e-12
+    pn = vec([g(t.nodes_u[i], t.nodes_v[j]) + 10 * t.nodes_w[k] for i in 1:t.Nu, j in 1:t.Nv, k in 1:t.Nw])
+    @test interpolate(t, PrimalNode(), pn, 2.9, 2.6, 0.27) ≈ g(2.9, 2.6) + 2.7 atol = 1e-12
+end
+
 @testset "outside the domain: NaN with a warning" begin
     v = zeros(3 * d.Np)
     for entity in entities
         got = @test_logs (:warn, r"outside of the domain") interpolate(d, entity, v, -1.0, 2.0, 2.0)
         @test length(got) == 3
         @test all(isnan, got)
+    end
+end
+
+@testset "the data must fit the entity" begin
+    # 3Np values for edges and facets, Np for nodes: a vector of the other kind is an
+    # error, not read silently (an edge vector as nodal values, say); also outside
+    for entity in entities, p in ((2.9, 2.6, 2.2), (-1.0, 2.0, 2.0))
+        @test_throws "$(nameof(typeof(entity))) data has length $(d.Np), the domain needs $(3d.Np)" interpolate(d, entity, zeros(d.Np), p...)
+    end
+    for entity in (PrimalNode(), DualNode()), p in ((2.9, 2.6, 2.2), (-1.0, 2.0, 2.0))
+        @test_throws DimensionMismatch interpolate(d, entity, zeros(3d.Np), p...)
+        @test_throws DimensionMismatch interpolate(d, entity, zeros(d.Np + 1), p...)
     end
 end
 

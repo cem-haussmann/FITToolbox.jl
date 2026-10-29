@@ -14,12 +14,25 @@ const D = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0]; units="m")
 @testset "grid arithmetic" begin
     @test (D.Nu, D.Nv, D.Nw) == (4, 5, 6)
     @test D.Np == 120
+    @test get_cell_count(D) == 3 * 4 * 5 == prod(size(D.material)[1:3])
+    @test get_cell_count(create_domain([0.1, 0.3], [0.2], [0.05, 0.05, 0.4])) == 2 * 1 * 3
     @test length(D.edges_u) == D.Nu - 1
     @test sum(D.edges_u) ≈ 6.0
     @test length(D.dual_edges_u) == D.Nu
     @test sum(D.dual_edges_u) ≈ 6.0        # dual edges tile the same extent
     # the float-division case that used to throw InexactError
     @test create_domain([0.3, 1.0, 1.0], [0.1, 0.1, 0.1]).Nu == 4
+    # three values each, else an error instead of a NaN in place of a domain
+    @test_throws "3 values each" create_domain([6.0, 8.0], [2.0, 2.0, 2.0])
+    @test_throws "3 values each" create_domain([6.0, 8.0, 10.0], [2.0, 2.0])
+    # every cell width, size and resolution positive and finite, at least one cell:
+    # otherwise the nodes are out of order and every search on them goes wrong
+    for bad in ([1.0, 0.0, 1.0], [1.0, -1.0, 1.0], [1.0, NaN], [Inf], Float64[])
+        @test_throws "all positive and finite" create_domain([1.0, 1.0], bad, [1.0])
+    end
+    @test_throws "domain size must be positive" create_domain([-1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test_throws "domain size must be positive" create_domain([NaN, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test_throws "resolution must be positive" create_domain([1.0, 1.0, 1.0], [0.1, 0.0, 0.1])
 end
 
 @testset "operator identities" begin
@@ -29,6 +42,60 @@ end
     @test get_curl(D, Dual())       ≈ C'
     @test get_divergence(D, Dual()) ≈ -G'
     @test get_gradient(D, Dual())   ≈ -S'
+    # all six are sparse matrices, none a lazy adjoint
+    @test all(op -> op isa SparseMatrixCSC, (C, G, S, get_curl(D, Dual()), get_gradient(D, Dual()),
+                                            get_divergence(D, Dual())))
+end
+
+@testset "boundary indices and projections" begin
+    # against a direct count on the non-cubic grid: component c of an edge or facet vector
+    # at a node is normal to the faces normal to c and tangential to the other faces
+    Np, Nu, Nv, Nw = D.Np, D.Nu, D.Nv, D.Nw
+    node(i, j, k) = i + (j-1)*Nu + (k-1)*Nu*Nv
+    normal, tangential = Int[], Int[]
+    for k in 1:Nw, j in 1:Nv, i in 1:Nu, c in 1:3
+        onface = (i in (1, Nu), j in (1, Nv), k in (1, Nw))            # on a face normal to u, v, w
+        onface[c] && push!(normal, (c-1)*Np + node(i, j, k))
+        any(onface[d] for d in 1:3 if d != c) && push!(tangential, (c-1)*Np + node(i, j, k))
+    end
+    @test get_all_normal_boundary_indices(D) == sort(normal)
+    @test get_all_tangential_boundary_indices(D) == sort(tangential)
+    faces = [(n, s) for n in (DirX(), DirY(), DirZ()) for s in (Positive(), Negative())]
+    for (component, expected) in ((NormalComponent(), normal), (TangentialComponent(), tangential))
+        R = get_boundary_matrix(D, faces, component)
+        @test size(R) == (3Np, 3Np) && isdiag(R)
+        @test findall(iszero, diag(R)) == sort(expected) && all(isone, diag(R)[setdiff(1:3Np, expected)])
+    end
+    @test size(get_boundary_matrix(D, faces, NodalComponent())) == (Np, Np)
+    # one face, u = nodes_u[end]: its v- and w-entries are tangential, its u-edges the dead ones
+    @test get_custom_boundary_indices(D, [(DirX(), Positive())], TangentialComponent()) ==
+          sort(vec([(c-1)*Np + node(Nu, j, k) for c in 2:3, j in 1:Nv, k in 1:Nw]))
+    @test get_custom_boundary_indices(D, [(DirX(), Positive())], NormalComponent()) ==
+          get_ghost_indices(D)[1:Nv*Nw]
+    p, i, j, k = get_boundary_indices(D, DirY(), Negative())
+    @test (i, j, k) == (1:Nu, 1, 1:Nw) && p == vec([node(i, 1, k) for i in 1:Nu, k in 1:Nw])
+end
+
+@testset "every exported name has a docstring" begin
+    deprecated = (:create_cube!, :create_circular_loop_source)
+    undocumented = filter(names(FITToolbox)) do n
+        n === :FITToolbox && return false
+        n in deprecated && return false
+        b = Base.Docs.Binding(FITToolbox, n)                                # resolves to the defining module
+        return !haskey(Base.Docs.meta(b.mod), b)
+    end
+    @test isempty(undocumented)
+end
+
+@testset "deprecated names" begin
+    # every old name goes through Base.depwarn: a deprecation warning with --depwarn=yes,
+    # as in Pkg.test, silent otherwise; the old call still gives the new result
+    @test (@test_deprecated get_curl(D))     == get_curl(D, Primal())
+    @test (@test_deprecated get_gradient(D)) == get_gradient(D, Primal())
+    d = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0])
+    @test (@test_deprecated create_cube!(d, 0, 0, 0, 4, 4, 4; ε_r = 3.0, name = "cube")) == 1
+    @test only(list_objects(d)).object isa FITToolbox.Brick
+    @test all(d.material[1:2, 1:2, 1:2, 2] .== 3.0) && d.material[3, 1, 1, 2] == 1.0
 end
 
 @testset "system matrix" begin
@@ -62,6 +129,25 @@ end
     end
     x, y, z = 2.3, 3.7, 4.1
     @test interpolate(D, DualNode(), f, x, y, z) ≈ 2x + 3y - z atol=1e-12
+
+    # within half a cell of the boundary there is no dual node beyond the point: the
+    # first or last dual cell is extrapolated linearly, without a warning
+    left  = @test_logs interpolate(D, DualNode(), f, 0.5, y, z)
+    right = @test_logs interpolate(D, DualNode(), f, 5.5, y, z)
+    @test left  ≈ 2*0.5 + 3y - z atol=1e-12
+    @test right ≈ 2*5.5 + 3y - z atol=1e-12
+
+    # exactly on the far boundary, despite the rounding of the last node: a value, no warning
+    B = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test B.nodes_u[end] < 1.0
+    fB = [2*B.nodes_u[i] + 3*B.nodes_v[j] - B.nodes_w[k] for i in 1:B.Nu, j in 1:B.Nv, k in 1:B.Nw] |> vec
+    @test (@test_logs interpolate(B, PrimalNode(), fB, 1.0, 0.5, 0.5)) ≈ 2 + 1.5 - 0.5 atol=1e-12
+
+    # outside the domain: NaN with a warning, for dual quantities as for primal ones
+    for (entity, p) in ((DualNode(), (-1.0, y, z)), (DualNode(), (x, 8.5, z)),
+                        (DualNode(), (x, y, 10.5)), (PrimalNode(), (7.0, y, z)))
+        @test isnan(@test_logs (:warn, r"outside of the domain") interpolate(D, entity, f, p...))
+    end
 end
 
 @testset "CFL" begin
@@ -87,6 +173,8 @@ end
     @test FITToolbox.check_units("mm") == 1e-3
     @test FITToolbox.check_units("μm") == 1e-6    # U+03BC greek mu
     @test FITToolbox.check_units("µm") == 1e-6    # U+00B5 micro sign
+    @test FITToolbox.check_units("km") == 1e3
+    @test_throws "unknown unit" FITToolbox.check_units("furlong")
 end
 
 @testset "dual volumes sit on primal nodes" begin
@@ -138,6 +226,7 @@ include("sources.jl")
 include("objects.jl")
 include("history.jl")
 include("saveload.jl")
+include("viewer.jl")
 
 
 @testset "plotting extension" begin
@@ -158,6 +247,24 @@ include("saveload.jl")
     @test fig2 isa Figure
 
     @test_throws DimensionMismatch plot_nodal_values(D, Primal(), f[1:end-1], DirZ())
+
+    # a fixed colour range, and a log scale that ignores zero and negative values
+    @test plot_nodal_values(D, Primal(), f, DirZ(); pos = 4.0, clip_range = (0.0, 10.0)) isa Figure
+    @test plot_nodal_values(D, Primal(), f, DirZ(); pos = 4.0, logscale = true) isa Figure
+    @test_throws "no positive values" plot_nodal_values(D, Primal(), -abs.(f) .- 1, DirZ();
+                                                        pos = 4.0, logscale = true)
+
+    # cuts normal to x and y, with the field lines: the in-plane axes and the colour range
+    # of the slice, f = 2x + 3y - z on x = 2 m (-6 … 28) and on y = 4 m (2 … 24)
+    for (normal, pos, labels, range) in ((DirX(), 2.0, ("y", "z"), (-6, 28)),
+                                         (DirY(), 4.0, ("x", "z"), (2, 24)))
+        fig = plot_nodal_values(D, Primal(), f, normal; pos, plot_negative_gradient = true)
+        ax = only(c for c in fig.content if c isa Axis)
+        @test (ax.xlabel[], ax.ylabel[]) == ("$(labels[1])-direction (m)", "$(labels[2])-direction (m)")
+        hm = only(p for p in ax.scene.plots if p isa Heatmap)
+        @test all(hm.colorrange[] .≈ range)
+        @test any(p -> p isa StreamPlot, ax.scene.plots)
+    end
 end
 
 end

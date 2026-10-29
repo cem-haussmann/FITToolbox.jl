@@ -3,6 +3,7 @@
 #Date: 20/03/2026
 
 function interpolate(domain::FITDomain, ::PrimalEdge, datavectorFIT::AbstractVector, x, y, z; units="m")
+        _check_length(domain, PrimalEdge(), datavectorFIT)
         x, y, z = convert_to_meter(x, y, z, units)
 
         result = _findPositionPrimal(domain, x, y, z)
@@ -21,6 +22,7 @@ function interpolate(domain::FITDomain, ::PrimalEdge, datavectorFIT::AbstractVec
 end
 
 function interpolate(domain::FITDomain, ::DualFacet, datavectorFIT::AbstractVector, x, y, z; units="m")
+        _check_length(domain, DualFacet(), datavectorFIT)
         x, y, z = convert_to_meter(x, y, z, units)
 
         result = _findPositionPrimal(domain, x, y, z)

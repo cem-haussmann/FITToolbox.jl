@@ -5,14 +5,18 @@
 # material and history, hand-written files, and invalid input.
 # Included from runtests.jl.
 
-using FITToolbox, Test
+using FITToolbox, Test, TOML
+
+# an object type save_domain does not know, standing in for a future one that was
+# not added to SaveLoad.jl (structs must be defined at top level)
+struct _UnsavableObject <: FITToolbox.AbstractFITObject end
 
 # a domain with every object type, a named and an unnamed object, a colour,
 # and a removed object, so the file contains a delete step
 function _saveload_domain(d)
     create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7, name="plate", color="copper")
     create_sphere!(d, 3, 4, 5, 2.5; ε_r=7.0, μ_r=3.0)
-    create_circular_loop_source!(d, 1.0, 3.0, 4.0, 5.0, DirX(); name="coil", current=250.0)
+    create_circular_loop_source!(d, 3.0, 4.0, 5.0, 1.0, DirX(); name="coil", current=250.0)
     create_brick!(d, 2, 2, 2, 2, 2, 6; μ_r=9.0)
     @test_logs remove_object!(d, 4)
     return d
@@ -172,9 +176,9 @@ end
 
 @testset "save/load: complex current" begin
     d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
-    create_circular_loop_source!(d, 0.2, 0.3, 0.5, 0.5, DirX(); current=250 - 30im, name="ac")
-    create_circular_loop_source!(d, 0.2, 0.6, 0.5, 0.5, DirX(); current=100, name="dc")
-    create_circular_loop_source!(d, 0.2, 0.5, 0.5, 0.5, DirX(); current=5 + 0im, name="zero_im")
+    create_circular_loop_source!(d, 0.3, 0.5, 0.5, 0.2, DirX(); current=250 - 30im, name="ac")
+    create_circular_loop_source!(d, 0.6, 0.5, 0.5, 0.2, DirX(); current=100, name="dc")
+    create_circular_loop_source!(d, 0.5, 0.5, 0.5, 0.2, DirX(); current=5 + 0im, name="zero_im")
     mktempdir() do dir
         path = save_domain(joinpath(dir, "complex.toml"), d)
         text = read(path, String)
@@ -247,5 +251,183 @@ end
         # allowed: a name freed by a delete, and the default name of its own obj_id
         @test [x.name for x in list_objects(load(file(2, brick(1, "a"), delete(1), brick(2, "a"))))] == ["a"]
         @test [x.name for x in list_objects(load(file(1, brick(1, "obj1"))))] == ["obj1"]
+    end
+end
+
+@testset "save/load: values missing or of the wrong kind" begin
+    # a saved file with one value changed at a time: an ArgumentError that names the
+    # file and the place in it, never a KeyError or MethodError from deep inside
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    create_cylinder!(d, 0.5, 0.5, 0.1, 0.2, 0.5, DirZ(); name = "rod", color = "copper")   # step 1
+    create_circular_loop_source!(d, 0.5, 0.5, 0.5, 0.2, DirZ(); name = "coil")              # step 2
+    create_polyline_source!(d, [(0.1, 0.1, 0.1), (0.5, 0.1, 0.1), (0.5, 0.5, 0.1)];         # step 3
+                            closed = true, name = "wire")
+    mktempdir() do dir
+        good = TOML.parsefile(save_domain(joinpath(dir, "good.toml"), d))
+        path = joinpath(dir, "bad.toml")
+        write_toml(t) = open(io -> TOML.print(io, t), path, "w")
+        # the message of loading the good file changed by f!
+        function message(f!)
+            bad = deepcopy(good)
+            f!(bad)
+            write_toml(bad)
+            err = try
+                load_domain(path)
+            catch e
+                e
+            end
+            @test err isa ArgumentError
+            return err isa ArgumentError ? err.msg : ""
+        end
+        write_toml(good)                                               # the round trip itself is fine
+        @test load_domain(path)._history.steps == d._history.steps
+
+        for (f!, expected) in (
+                # the grid and the background
+                (t -> delete!(t, "domain"),                    "$path: \"domain\" is missing"),
+                (t -> delete!(t["domain"], "edges_u"),         "$path, [domain]: \"edges_u\" is missing"),
+                (t -> t["domain"]["edges_v"] = [0.5, -0.5],    "\"edges_v\" must be a list of positive cell widths"),
+                (t -> t["domain"]["sigma"] = "0",              "\"sigma\" must be a number, got \"0\""),
+                (t -> t["domain"]["obj_counter"] = 2.5,        "\"obj_counter\" must be a non-negative integer"),
+                (t -> t["steps"] = Dict("op" => "create"),     "\"steps\" must be an array of tables"),
+                # the steps
+                (t -> t["steps"] = [7],                        "$path, step 1 is not a table"),
+                (t -> delete!(t["steps"][1], "radius"),        "$path, step 1: \"radius\" is missing"),
+                (t -> t["steps"][1]["height"] = "0.5",         "step 1: \"height\" must be a number"),
+                (t -> t["steps"][1]["radius"] = true,          "step 1: \"radius\" must be a number, got true"),
+                (t -> t["steps"][1]["axis"] = "DirW",          "step 1: \"axis\" must be \"DirX\", \"DirY\" or \"DirZ\""),
+                (t -> t["steps"][1]["color"] = "copperish",    "step 1: \"color\" must be a hex code"),
+                (t -> t["steps"][1]["base"] = [0.5, 0.5],      "step 1: \"base\" must be 3 numbers"),
+                (t -> t["steps"][1]["obj_id"] = 1.5,           "step 1: \"obj_id\" must be a positive integer"),
+                (t -> t["steps"][1]["name"] = "",              "obj_id 1 has an empty name"),
+                (t -> t["steps"][2]["normal"] = 3,             "step 2: \"normal\" must be \"DirX\""),
+                (t -> t["steps"][2]["current_im"] = "1",       "step 2: \"current_im\" must be a number"),
+                (t -> t["steps"][3]["points"][2] = [0.5, 0.1], "step 3: \"points\" must be a list of points of 3 numbers"),
+                (t -> t["steps"][3]["closed"] = 1,             "step 3: \"closed\" must be true or false"),
+                (t -> t["steps"][3]["type"] = "Polyline",      "step 3: unknown object type \"Polyline\""),
+                (t -> t["steps"][3]["op"] = "remove",          "step 3: unknown op \"remove\""),
+                # valid values, but a source that does not fit the grid of the file
+                (t -> t["steps"][2]["radius"] = 0.6,           "source \"coil\" (obj_id 2) does not fit this grid"))
+            @test occursin(expected, message(f!))
+        end
+    end
+end
+
+@testset "save/load: object type without save support" begin
+    # not a solid, so the rebuild check in save_domain skips it and the error comes
+    # from writing the step
+    d = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0])
+    push!(d._history.steps, FITToolbox.CreateObject(1, "new", _UnsavableObject()))
+    d._history.obj_counter = 1
+    mktempdir() do dir
+        path = joinpath(dir, "new.toml")
+        @test_throws "cannot save objects of type _UnsavableObject" save_domain(path, d)
+        @test !isfile(path)                      # nothing half-written
+    end
+end
+
+@testset "save/load: cylinders" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_cylinder!(d, 0.5, 0.5, 0.1, 0.15, 0.3, DirZ(); σ = 5.8e7, name = "rod", color = "copper")
+    create_cylinder!(d, 0.1, 0.3, 0.3, 0.1, 0.5, DirX(); ε_r = 4.0)
+    create_cylinder!(d, 0.7, 0.1, 0.7, 0.05, 0.8, DirY(); μ_r = 100.0)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "cyl.toml"), d)
+        @test occursin("axis = \"DirY\"", read(path, String))
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test e.material == d.material
+    end
+end
+
+@testset "save/load: tori" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_torus!(d, 0.5, 0.5, 0.5, 0.25, 0.08, DirZ(); μ_r = 2000.0, name = "core", color = "darkgray")
+    create_torus!(d, 0.3, 0.5, 0.5, 0.15, 0.05, DirX(); σ = 5.8e7)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "tori.toml"), d)
+        @test occursin("minor_radius = 0.08", read(path, String))
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test e.material == d.material
+    end
+end
+
+@testset "save/load: helices" begin
+    d = create_domain([0.2, 0.2, 0.2], [0.005, 0.005, 0.005])
+    create_helix!(d, 0.1, 0.1, 0.05, 0.04, 0.008, 0.03, 3, DirZ(); σ = 5.8e7, name = "coil", color = "copper")
+    create_helix!(d, 0.05, 0.1, 0.1, 0.03, 0.006, 0.02, 2.5, DirX(); start_angle = 135,
+                  left_handed = true, μ_r = 50.0)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "helices.toml"), d)
+        @test occursin("left_handed = true", read(path, String))
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test e.material == d.material
+        @test get_helix_ends(e, 2) == get_helix_ends(d, 2)
+    end
+end
+
+@testset "save/load: cut-outs" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1]; ε_r = 2.0)
+    create_brick!(d, 0.2, 0.2, 0.2, 0.6, 0.6, 0.6; μ_r = 1000.0, name = "core")
+    create_brick!(d, 0.3, 0.2, 0.3, 0.4, 0.6, 0.4; color = "background", name = "window")
+    mktempdir() do dir
+        e = load_domain(save_domain(joinpath(dir, "cutout.toml"), d))
+        @test e._history.steps == d._history.steps && e.material == d.material
+        @test list_objects(e)[2].object.material.color == "background"
+    end
+end
+
+@testset "save/load: point charges" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    create_electric_charge!(d, 0.5, 0.5, 0.5; charge = 1.602176634e-19, name = "proton")
+    create_electric_charge!(d, 0.23, 0.71, 0.4; charge = -3e-9)
+    create_electric_charge!(d, 0.1, 0.1, 0.9; charge = 2e-9, name = "q3")
+    mktempdir() do dir
+        e = load_domain(save_domain(joinpath(dir, "charges.toml"), d))
+        @test e._history.steps == d._history.steps
+        @test all(get_source(e, id) == get_source(d, id) for id in 1:3)
+    end
+end
+
+@testset "save/load: rectangular loops" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_rectangular_loop_source!(d, 0.2, 0.3, 0.4, 0.3, 0.2, DirZ(); current = 5.0, name = "frame")
+    create_rectangular_loop_source!(d, 0.5, 0.2, 0.2, (0.3, 0.4), DirY(); current = 1 - 2im)
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "rect.toml"), d)
+        @test count("current_im", read(path, String)) == 1
+        e = load_domain(path)
+        @test e._history.steps == d._history.steps
+        @test all(get_source(e, id) == get_source(d, id) for id in 1:2)
+    end
+end
+
+@testset "save/load: polyline sources" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    @test_logs (:info, r"Open polyline") create_polyline_source!(d, [(0.1, 0.2, 0.3), (0.7, 0.6, 0.8), (0.4, 0.9, 0.5)];
+                                                                 current = 4.0, name = "open")
+    create_polyline_source!(d, [(0.2, 0.2, 0.3), (0.8, 0.2, 0.3), (0.5, 0.7, 0.3)]; closed = true, current = 1 + 1im)
+    mktempdir() do dir
+        e = load_domain(save_domain(joinpath(dir, "poly.toml"), d))
+        @test e._history.steps == d._history.steps
+        @test all(get_source(e, id) == get_source(d, id) for id in 1:2)
+    end
+end
+
+@testset "save/load: replay on another grid" begin
+    # a loaded model carries its history, so it can be moved to a finer grid like the original
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_torus!(d, 0.5, 0.5, 0.7, 0.2, 0.05, DirY(); μ_r = 50.0, name = "ring")
+    create_helix!(d, 0.5, 0.5, 0.1, 0.3, 0.04, 0.15, 2, DirZ(); σ = 1e6, start_angle = 90, name = "coil")
+    create_brick!(d, 0.4, 0.4, 0.4, 0.2, 0.2, 0.2; color = "background", name = "hole")
+    mktempdir() do dir
+        e = load_domain(save_domain(joinpath(dir, "replay.toml"), d))
+        fine_e = @test_logs change_resolution(e, 0.025)
+        fine_d = @test_logs change_resolution(d, 0.025)
+        @test fine_e.material == fine_d.material
+        @test fine_e._history.steps == fine_d._history.steps
+        @test get_helix_ends(fine_e, "coil") == get_helix_ends(d, "coil")
     end
 end

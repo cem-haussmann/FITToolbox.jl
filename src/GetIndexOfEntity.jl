@@ -197,3 +197,14 @@ _coords_of_ijk(c, ::PrimalNodeDualVolume, ::AnyDirection, i, j, k) =
     (c.nodes_u[i],        c.nodes_v[j],        c.nodes_w[k])
 _coords_of_ijk(c, ::DualNodePrimalVolume, ::AnyDirection, i, j, k) =
     (c.edges_u_center[i], c.edges_v_center[j], c.edges_w_center[k])
+
+# The same layout per axis: true where the entity sits at the edge centres, N - 1
+# positions, rather than on the nodes, N positions
+_centred(::PrimalEdgeOrDualFacet, ::DirX) = (true,  false, false)
+_centred(::PrimalEdgeOrDualFacet, ::DirY) = (false, true,  false)
+_centred(::PrimalEdgeOrDualFacet, ::DirZ) = (false, false, true)
+_centred(::DualEdgeOrPrimalFacet, ::DirX) = (false, true,  true)
+_centred(::DualEdgeOrPrimalFacet, ::DirY) = (true,  false, true)
+_centred(::DualEdgeOrPrimalFacet, ::DirZ) = (true,  true,  false)
+_centred(::PrimalNodeDualVolume, ::AnyDirection) = (false, false, false)
+_centred(::DualNodePrimalVolume, ::AnyDirection) = (true,  true,  true)

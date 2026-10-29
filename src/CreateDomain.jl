@@ -6,6 +6,10 @@ abstract type AbstractFITObject end
 
 abstract type AbstractSolid  <: AbstractFITObject end
 abstract type AbstractSource <: AbstractFITObject end
+# currents on the primal edges; their edges with the current per unit (±1) are _unit_edges
+abstract type AbstractEdgeSource <: AbstractSource end
+# closed current loops
+abstract type AbstractLoopSource <: AbstractEdgeSource end
 
 struct Material
     σ::Float64
@@ -32,10 +36,22 @@ const _NAMED_COLORS = Dict(
     "black"     => "#000000", "white"      => "#FFFFFF",
     # typical conductor colours
     "copper"    => "#B87333", "aluminium"  => "#A8A9AD", "gold"      => "#D4AF37",
+    # a cut-out (see _solid_material); view_domain draws it transparent or as a hole
+    "background" => "#D3D3D3",
 )
 
 const _HEX_COLOR = r"^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
 _valid_color(c) = occursin(_HEX_COLOR, c) || haskey(_NAMED_COLORS, lowercase(c))
+
+# The material of a new solid. color = "background" makes it a cut-out: it takes the
+# background material of the domain, whatever σ, ε_r and μ_r say.
+function _solid_material(domain, σ, ε_r, μ_r, color)
+    (color !== nothing && lowercase(color) == "background") || return Material(σ, ε_r, μ_r, color)
+    (σ, ε_r, μ_r) == (0.0, 1.0, 1.0) ||
+        @warn "color = \"background\" makes the object a cut-out of the background material; \
+               the given σ, ε_r and μ_r are ignored" σ ε_r μ_r
+    return Material(domain.σ, domain.ε_r, domain.μ_r, "background")
+end
 
 # hex code for plotting; names are resolved through _NAMED_COLORS
 _color_hex(c::String) = startswith(c, '#') ? c : _NAMED_COLORS[lowercase(c)]
@@ -62,6 +78,8 @@ DomainHistory() = DomainHistory(AbstractOperation[], 0)
 
 
 function _cell_count(extent, res; rtol=1e-9)
+    isfinite(extent) && extent > 0 ||
+        throw(ArgumentError("domain size must be positive and finite, got $extent"))
     res > 0 || throw(ArgumentError("resolution must be positive, got $res"))
     n = round(Int, extent / res)
     n >= 1 || throw(ArgumentError("domain size $extent is smaller than resolution $res"))
@@ -70,6 +88,28 @@ function _cell_count(extent, res; rtol=1e-9)
     return n
 end
 
+"""
+    FITDomain
+
+The computational domain made by `create_domain`: the primal grid and its dual, the
+background material, the material of every cell, and the history of the objects created
+in it. Build it with `create_domain`, not directly.
+
+Its fields, all lengths in m:
+- `nodes_u`, `nodes_v`, `nodes_w`: the primal nodes along each axis, `Nu`, `Nv` and `Nw` of
+  them; `Np = Nu Nv Nw` nodes in all, numbered `p = i + (j-1)Nu + (k-1)NuNv`.
+- `edges_u`, `edges_v`, `edges_w`: the primal edge lengths, i.e. the cell widths, `Nu - 1`
+  along u; `edges_u_center`, … their midpoints, where the dual nodes lie.
+- `dual_edges_u`, `dual_edges_v`, `dual_edges_w`: the dual edge lengths, from cell centre
+  to cell centre and halved at the boundary, `Nu` along u.
+- `primal_facets_u`, … and `dual_facets_u`, …: the facet areas normal to each axis,
+  `(Nv-1) × (Nw-1)` primal and `Nv × Nw` dual ones normal to u.
+- `σ`, `ε_r`, `μ_r`: the background material.
+- `material`: `(Nu-1) × (Nv-1) × (Nw-1) × 3`, the conductivity, relative permittivity and
+  relative permeability of every cell. It is rebuilt from the history whenever that
+  changes; values written into it directly are not part of the history, so
+  `remove_object!`, `undo!`, `change_resolution` and `save_domain` warn that they are lost.
+"""
 struct FITDomain{T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
     # Grid nodes
     nodes_u::A        # length Nu
@@ -149,7 +189,7 @@ struct FITDomain{T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
             nodes_u, nodes_v, nodes_w,
             edges_u, edges_v, edges_w,
             dual_edges_u, dual_edges_v, dual_edges_w,
-            edges_u_center, edges_v_center, edges_w_center,   # ← move before facets
+            edges_u_center, edges_v_center, edges_w_center,
             primal_facets_u, primal_facets_v, primal_facets_w,
             dual_facets_u, dual_facets_v, dual_facets_w,
             Nu, Nv, Nw, Np,
@@ -160,26 +200,69 @@ struct FITDomain{T<:AbstractFloat, A<:AbstractVector{T}, M<:AbstractMatrix{T}}
     end
 end
 
+# Slack for comparing positions with the nodes of one axis. The nodes are a running sum
+# of the cell widths, so the last one can miss the requested extent by rounding: ten cells
+# of 0.1 m end at 0.9999999999999999 m. Without the slack an object reaching exactly to
+# the boundary would count as beyond it.
+_slack(nodes) = 1e-9 * (nodes[end] - nodes[1])
+
+# true if x lies within lo … hi of this axis, up to the slack
+_within(x, nodes, lo = nodes[1], hi = nodes[end]) =
+    lo - _slack(nodes) <= x <= hi + _slack(nodes)
+
+# The cells along `nodes` (cell i from nodes[i] to nodes[i+1]) that can hold part of a
+# solid within [lo, hi], its extent along that axis: those overlapping it, and one more on
+# each side against rounding. Painting a solid scans these alone, so its cost grows with
+# its size on the grid, not with the grid.
+_cell_range(nodes, lo, hi) =
+    max(1, searchsortedlast(nodes, lo) - 1):min(length(nodes) - 1, searchsortedfirst(nodes, hi) + 1)
+_cell_ranges(domain, (lo, hi)) =
+    ntuple(d -> _cell_range((domain.nodes_u, domain.nodes_v, domain.nodes_w)[d], lo[d], hi[d]), 3)
+
+"""
+    create_domain(domain_size, resolution; units = "m", σ = 0.0, ε_r = 1.0, μ_r = 1.0)
+        -> FITDomain
+    create_domain(Edges_U, Edges_V, Edges_W; units = "m", σ = 0.0, ε_r = 1.0, μ_r = 1.0)
+        -> FITDomain
+
+A computational domain: a box from the origin with the staggered grid pair of the Finite
+Integration Technique on it, filled with a homogeneous background material of
+conductivity `σ` (S/m), relative permittivity `ε_r` and relative permeability `μ_r`.
+Objects and sources go in with the `create_*!` functions, which record them in the
+history of the domain (see `list_objects`).
+
+The first form gives an equidistant grid: `domain_size` and `resolution` are three
+values each, the extent and the cell width along u, v and w. A resolution that does not
+divide the extent gives the nearest whole number of cells, with a warning; the domain
+is then that much smaller or larger. The second form takes the cell widths along each
+axis, for a graded grid; the nodes are their running sums from 0. All lengths are given
+in `units` ("nm", "μm", "mm", "cm", "dm", "m" or "km"); the domain stores them in m.
+
+Throws an `ArgumentError` if `domain_size` or `resolution` does not have three values, or
+if a size, a resolution or a cell width is not positive and finite, or if an axis has no
+cell.
+
+# Examples
+
+```julia
+domain = create_domain([1.0, 1.0, 1.0], [0.01, 0.01, 0.01])        # 100³ cells of 1 cm
+domain = create_domain([100, 100, 100], [1, 1, 1]; units = "cm")    # the same
+edges  = vcat(20.0, 10.0, 5.0, fill(2.0, 50), 5.0, 10.0, 20.0)      # fine in the middle
+domain = create_domain(edges, edges, edges; units = "mm", ε_r = 2.0)
+```
+"""
 function create_domain(domain_size, resolution; units="m", σ=0.0, ε_r=1.0, μ_r=1.0)
     σ = Float64(σ)
     ε_r = Float64(ε_r)
     μ_r  = Float64(μ_r)
 
-    if !(length(domain_size) in (3)) || length(resolution) != 3
-        @warn "The length of the domain vector (3) or resolution (3) is wrong"
-        return NaN
-    end
+    length(domain_size) == 3 && length(resolution) == 3 ||
+        throw(ArgumentError("domain_size and resolution need 3 values each (u, v, w), got \
+                             $(length(domain_size)) and $(length(resolution))"))
 
-    o = zeros(6)
-    if length(domain_size) == 3
-        o[2] = domain_size[1]
-        o[4] = domain_size[2]
-        o[6] = domain_size[3]
-    else
-        o=copy(domain_size)
-    end
-
-    _create_domain(o[1],o[2],o[3],o[4],o[5],o[6],resolution[1],resolution[2],resolution[3]; units=units, σ=σ, ε_r=ε_r, μ_r=μ_r)
+    # the domain starts at the origin
+    _create_domain(0.0, domain_size[1], 0.0, domain_size[2], 0.0, domain_size[3],
+                   resolution[1], resolution[2], resolution[3]; units=units, σ=σ, ε_r=ε_r, μ_r=μ_r)
 end
 
 #this is a basic implementation for equi-distant grids
@@ -202,12 +285,20 @@ function _create_domain(x_min, x_max, y_min, y_max, z_min, z_max, res_x, res_y, 
     return create_domain(Edges_U,Edges_V,Edges_W;units="m",σ,ε_r,μ_r)
 end            
 
-#here you can specify non-equi-distant grids by yourself. Important this takes Edges as input! Input needs to in meters!
+# non-equidistant grids: the cell widths along each axis, in `units`
 function create_domain(Edges_U, Edges_V, Edges_W; units="m", σ=0.0, ε_r=1.0, μ_r=1.0)
     σ = Float64(σ)
     ε_r = Float64(ε_r)
     μ_r  = Float64(μ_r)
     unitToMeter = check_units(units)
+
+    # zero, negative or NaN widths would give nodes out of order, and every search on
+    # them silently a wrong cell
+    for (name, e) in (("Edges_U", Edges_U), ("Edges_V", Edges_V), ("Edges_W", Edges_W))
+        !isempty(e) && all(x -> x isa Real && isfinite(x) && x > 0, e) ||
+            throw(ArgumentError("$name must hold at least one cell width, all positive \
+                                 and finite, got $(_shown(e))"))
+    end
 
     Edges_U = vec(Float64.(Edges_U))
     Edges_V = vec(Float64.(Edges_V))
@@ -251,7 +342,7 @@ function create_domain(Edges_U, Edges_V, Edges_W; units="m", σ=0.0, ε_r=1.0, �
         Nodes_U, Nodes_V, Nodes_W,
         Edges_U, Edges_V, Edges_W,
         Dual_Edges_U, Dual_Edges_V, Dual_Edges_W,
-        Edges_U_Center, Edges_V_Center, Edges_W_Center,      # ← centres first
+        Edges_U_Center, Edges_V_Center, Edges_W_Center,
         Primal_Facets_U, Primal_Facets_V, Primal_Facets_W,
         Dual_Facets_U, Dual_Facets_V, Dual_Facets_W,
         σ, ε_r, μ_r,
@@ -259,3 +350,20 @@ function create_domain(Edges_U, Edges_V, Edges_W; units="m", σ=0.0, ε_r=1.0, �
     )
     return domain
 end
+
+"""
+    get_cell_count(domain) -> Int
+
+The number of cells of the primal grid, `(Nu-1) (Nv-1) (Nw-1)`, e.g. to judge the size of
+a model before solving it. The cells along each axis are `size(domain.material)[1:3]`;
+the domain has `domain.Np` nodes, and about `3Np` edges and facets, the unknowns of the
+vector quantities.
+
+# Example
+
+```julia
+domain = create_domain([1.0, 0.8, 0.6], [0.01, 0.01, 0.01])
+get_cell_count(domain)          # 100 × 80 × 60 = 480000
+```
+"""
+get_cell_count(domain::FITDomain) = (domain.Nu - 1) * (domain.Nv - 1) * (domain.Nw - 1)

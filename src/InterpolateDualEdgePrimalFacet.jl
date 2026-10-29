@@ -1,5 +1,6 @@
 # InterpolateDualEdgePrimalFacet.jl
 function interpolate(domain::FITDomain, ::DualEdge, datavectorFIT::AbstractVector, x, y, z; units="m")
+        _check_length(domain, DualEdge(), datavectorFIT)
         x, y, z = convert_to_meter(x, y, z, units)
 
         result = _findPositionPrimal(domain, x, y, z)
@@ -18,6 +19,7 @@ function interpolate(domain::FITDomain, ::DualEdge, datavectorFIT::AbstractVecto
 end
 
 function interpolate(domain::FITDomain, ::PrimalFacet, datavectorFIT::AbstractVector, x, y, z; units="m")
+        _check_length(domain, PrimalFacet(), datavectorFIT)
         x, y, z = convert_to_meter(x, y, z, units)
 
         result = _findPositionPrimal(domain, x, y, z)

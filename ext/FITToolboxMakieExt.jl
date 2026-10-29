@@ -9,7 +9,7 @@ module FITToolboxMakieExt
 
 using FITToolbox
 using FITToolbox: DirX, DirY, DirZ, Direction, Primal, PrimalNode, PrimalEdge,
-                  check_units, get_gradient, interpolate
+                  check_units, get_gradient, interpolate, _axis_index
 using Makie
 
 # For a cut with normal `n`, return everything that differs between the three
@@ -70,6 +70,9 @@ function FITToolbox.plot_nodal_values(config, ::Primal, data::AbstractVector, no
     else
         (minimum(slice), maximum(slice))
     end
+    # Zero and negative values have no logarithm: leave them out of the heatmap
+    # (NaN is drawn transparent) instead of letting the colour scale fail on them.
+    logscale && (slice[slice .<= 0] .= NaN32)
 
     hm = heatmap!(ax, collect(an), collect(bn), slice;
                   colormap = cgrad(:jet, 256),
@@ -105,5 +108,9 @@ function FITToolbox.plot_nodal_values(config, ::Primal, data::AbstractVector, no
     Colorbar(fig[1, 2], hm; label = label)
     return fig
 end
+
+include("ViewDomain.jl")
+include("ViewCombined.jl")
+include("ViewField.jl")
 
 end # module FITToolboxMakieExt

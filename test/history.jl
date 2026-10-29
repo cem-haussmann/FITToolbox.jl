@@ -67,7 +67,8 @@ end
     d = _hist_domain()
     create_brick!(d, 0, 0, 0, 2, 2, 2)
 
-    @test_throws ArgumentError create_brick!(d, 0, 0, 0, 100, 2, 2)    # beyond the domain
+    @test_throws ArgumentError create_brick!(d, 100, 0, 0, 2, 2, 2)    # corner outside the domain
+    @test_throws ArgumentError create_brick!(d, 0, 0, 0, -2, 2, 2)     # negative length
     @test_throws ArgumentError create_brick!(d, 0, 0, 0, 0.5, 2, 2)    # thinner than one cell
     @test_throws ArgumentError create_sphere!(d, 3, 4, 5, 0.0)         # zero radius
     @test_throws ArgumentError create_sphere!(d, 30, 4, 5, 1.0)        # centre outside
@@ -129,7 +130,7 @@ end
     # same grid and loop as in sources.jl: off-centre, no warnings
     wire_domain() = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5])
     d = wire_domain()
-    id = create_circular_loop_source!(d, 8000.0, 10300.0, 15200.0, 14900.0, DirX();
+    id = create_circular_loop_source!(d, 10300.0, 15200.0, 14900.0, 8000.0, DirX();
                                       units="mm", name="coil")
 
     # returns the obj_id, like create_brick!; the vector comes from get_source
@@ -151,21 +152,21 @@ end
 
     # current scales the vector
     d2 = wire_domain()
-    J2 = get_source(d2, create_circular_loop_source!(d2, 8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0))
+    J2 = get_source(d2, create_circular_loop_source!(d2, 10.3, 15.2, 14.9, 8.0, DirX(); current=1000.0))
     @test J2 == 1000.0 .* J
     @test only(d2._history.steps).object.current == 1000.0
 
     # solids and sources share one id sequence
     d3 = wire_domain()
     @test create_brick!(d3, 0, 0, 0, 2, 2, 2) == 1
-    @test create_circular_loop_source!(d3, 8.0, 10.3, 15.2, 14.9, DirX()) == 2
+    @test create_circular_loop_source!(d3, 10.3, 15.2, 14.9, 8.0, DirX()) == 2
     @test create_sphere!(d3, 10, 15, 15, 2) == 3
 
     # failed calls are not recorded
-    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirY())
-    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirZ())
-    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 19.5, 15.2, 14.9, DirX())  # plane beyond nodes_u[end-2]
-    @test_throws ArgumentError create_circular_loop_source!(d, 8.0, 10.3, 25.0, 14.9, DirX())  # v + R beyond the domain
+    @test_throws ArgumentError create_circular_loop_source!(d, 10.3, 15.2, 14.9, 8.0, DirY())  # u + R = 18.3 > nodes_u[end-2]
+    @test_throws ArgumentError create_circular_loop_source!(d, 10.3, 15.2, 29.5, 8.0, DirZ())  # plane beyond nodes_w[end-2]
+    @test_throws ArgumentError create_circular_loop_source!(d, 19.5, 15.2, 14.9, 8.0, DirX())  # plane beyond nodes_u[end-2]
+    @test_throws ArgumentError create_circular_loop_source!(d, 10.3, 25.0, 14.9, 8.0, DirX())  # v + R beyond the domain
     @test length(d._history.steps) == 1
 end
 
@@ -174,7 +175,7 @@ end
     a = mk()
     create_brick!(a, 0, 0, 0, 4, 4, 4; σ=5.0)
     create_sphere!(a, 3, 4, 5, 2.5; ε_r=7.0, μ_r=3.0)
-    create_circular_loop_source!(a, 1.0, 3.0, 4.0, 5.0, DirX())
+    create_circular_loop_source!(a, 3.0, 4.0, 5.0, 1.0, DirX())
     create_brick!(a, 2, 2, 2, 2, 2, 6; μ_r=9.0)       # overlaps brick 1 and the sphere
 
     # replay reproduces the material exactly, including overlaps and background
@@ -226,7 +227,7 @@ end
     # removing a source keeps the material unchanged
     c = mk()
     create_brick!(c, 0, 0, 0, 4, 4, 4; σ=5.0)
-    id_loop = create_circular_loop_source!(c, 1.0, 3.0, 4.0, 5.0, DirX())
+    id_loop = create_circular_loop_source!(c, 3.0, 4.0, 5.0, 1.0, DirX())
     before  = copy(c.material)
     @test_logs remove_object!(c, id_loop)
     @test c.material == before
@@ -241,7 +242,7 @@ end
     create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7, name="plate", color="#B87333")
     create_sphere!(d, 10, 15, 15, 2; ε_r=4.0, name="shell")
     create_sphere!(d, 10, 15, 15, 1; ε_r=9.0)                          # no name
-    create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0)
+    create_circular_loop_source!(d, 10.3, 15.2, 14.9, 8.0, DirX(); name="coil", current=1000.0)
     @test_logs remove_object!(d, 2)
 
     # data: existing objects in creation order, the removed one left out
@@ -282,7 +283,7 @@ end
     d = create_domain([100, 100, 100], [1, 1, 1]; units="cm")
     c = d.nodes_v[end] / 2 * 100                                     # 50.000000000000036 cm
     create_sphere!(d, 65, c, c, 20; units="cm", σ=5.8e7, name="ball")
-    create_circular_loop_source!(d, 10, 30, c, c, DirX(); units="cm", current=1 + 1im, name="ac")
+    create_circular_loop_source!(d, 30, c, c, 10, DirX(); units="cm", current=1 + 1im, name="ac")
     @test only(e for e in list_objects(d) if e.name == "ball").object.center[2] != 0.5   # stored as is
 
     table = repr(MIME"text/plain"(), list_objects(d))
@@ -360,7 +361,7 @@ end
     @test _active_ids(a._history) == [1, 3]
 
     # undoing a source leaves the material unchanged
-    create_circular_loop_source!(a, 1.0, 3.0, 4.0, 5.0, DirX())
+    create_circular_loop_source!(a, 3.0, 4.0, 5.0, 1.0, DirX())
     @test_logs undo!(a)
     @test a.material == after_sphere
     @test _active_ids(a._history) == [1, 3]
@@ -377,7 +378,7 @@ end
 @testset "history: change_resolution" begin
     build!(d) = (create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.0, name="plate");
                  create_sphere!(d, 3, 4, 5, 2.5; ε_r=7.0, μ_r=3.0);
-                 create_circular_loop_source!(d, 1.0, 3.0, 4.0, 5.0, DirX());
+                 create_circular_loop_source!(d, 3.0, 4.0, 5.0, 1.0, DirX());
                  create_brick!(d, 2, 2, 2, 2, 2, 6; μ_r=9.0); d)
 
     coarse = build!(create_domain([6.0, 8.0, 10.0], [0.5, 0.5, 0.5]; σ=0.1, ε_r=2.0))
@@ -405,6 +406,13 @@ end
     # per-direction values and units
     mm = @test_logs change_resolution(coarse, (500, 250, 1000); units="mm")
     @test (mm.Nu, mm.Nv, mm.Nw) == (13, 33, 11)
+
+    # a resolution that does not divide the extent: one error that names the direction,
+    # in the units of the call, and no warnings before it
+    @test_logs @test_throws "resolution 0.7 m does not divide the extent of the domain in u, 6.0 m" change_resolution(coarse, 0.7)
+    @test_logs @test_throws "in v, 8000.0 mm (26.7 cells)" change_resolution(coarse, (500, 300, 1000); units="mm")
+    @test_throws "must be positive" change_resolution(coarse, (0.5, 0.5, 0.0))
+    @test coarse._history.steps == hist_before
 
     # non-uniform edges: same result as create_domain with these edges
     eu = [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0]                     # 6 m
@@ -438,13 +446,13 @@ end
     mk() = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5])
     d = mk()
     create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7, name="plate")
-    @test create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0) == 2
-    @test create_circular_loop_source!(d, 5.0, 6.0, 15.0, 15.0, DirX(); name="pickup", current=-200.0) == 3
+    @test create_circular_loop_source!(d, 10.3, 15.2, 14.9, 8.0, DirX(); name="coil", current=1000.0) == 2
+    @test create_circular_loop_source!(d, 6.0, 15.0, 15.0, 5.0, DirX(); name="pickup", current=-200.0) == 3
 
     # reference: each loop alone in an empty domain of the same grid
     alone(args...; kw...) = (e = mk(); get_source(e, create_circular_loop_source!(e, args...; kw...)))
-    J1 = alone(8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0)
-    J2 = alone(5.0, 6.0, 15.0, 15.0, DirX(); current=-200.0)
+    J1 = alone(10.3, 15.2, 14.9, 8.0, DirX(); current=1000.0)
+    J2 = alone(6.0, 15.0, 15.0, 5.0, DirX(); current=-200.0)
 
     # one source, by name or id: the same vector as the loop alone
     @test get_source(d, "coil")   == J1
@@ -472,7 +480,7 @@ end
     fine = change_resolution(d, (0.5, 0.25, 0.25))
     direct = create_domain([20.0, 30.0, 30.0], [0.5, 0.25, 0.25])
     @test get_source(fine, "coil") ==
-          get_source(direct, create_circular_loop_source!(direct, 8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0))
+          get_source(direct, create_circular_loop_source!(direct, 10.3, 15.2, 14.9, 8.0, DirX(); current=1000.0))
     @test length(get_source(fine, "coil")) == 3 * fine.Np
     @test get_source(d, "coil") == J1                                  # the original keeps its grid
 end
@@ -484,19 +492,19 @@ end
     # default names "obj<id>", user names kept
     @test create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7) == 1
     @test create_sphere!(d, 10, 15, 15, 2; ε_r=4.0, name="head") == 2
-    @test create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX(); name="coil", current=1000.0) == 3
-    @test create_circular_loop_source!(d, 5.0, 6.0, 15.0, 15.0, DirX()) == 4
+    @test create_circular_loop_source!(d, 10.3, 15.2, 14.9, 8.0, DirX(); name="coil", current=1000.0) == 3
+    @test create_circular_loop_source!(d, 6.0, 15.0, 15.0, 5.0, DirX()) == 4
     alone(args...; kw...) = (e = create_domain([20.0, 30.0, 30.0], [1.0, 0.5, 0.5]);
                              get_source(e, create_circular_loop_source!(e, args...; kw...)))
-    J1 = alone(8.0, 10.3, 15.2, 14.9, DirX(); current=1000.0)
-    J2 = alone(5.0, 6.0, 15.0, 15.0, DirX())
+    J1 = alone(10.3, 15.2, 14.9, 8.0, DirX(); current=1000.0)
+    J2 = alone(6.0, 15.0, 15.0, 5.0, DirX())
     @test [e.name for e in list_objects(d)] == ["obj1", "head", "coil", "obj4"]
 
     # names are unique; "obj<number>" is reserved; a rejected name changes nothing
     before = copy(d.material)
     @test_throws ArgumentError create_sphere!(d, 10, 15, 15, 3; ε_r=9.0, name="head")
     @test_throws ArgumentError create_brick!(d, 0, 0, 0, 2, 2, 2; name="obj7")
-    @test_throws ArgumentError create_circular_loop_source!(d, 5.0, 6.0, 15.0, 15.0, DirX(); name="coil")
+    @test_throws ArgumentError create_circular_loop_source!(d, 6.0, 15.0, 15.0, 5.0, DirX(); name="coil")
     @test d.material == before
     @test length(d._history.steps) == 4
     @test create_brick!(d, 0, 0, 0, 2, 2, 2) == 5                 # no id used up by the failures
@@ -521,11 +529,37 @@ end
     @test_logs undo!(d)                    # undoes creating the new "head"
     @test_logs undo!(d)                    # undoes the removal: old "head" back
     @test only(e for e in list_objects(d) if e.name == "head").obj_id == 2
+
+    # names and colours of any string type, e.g. the pieces of a split
+    rod = split("rod,spare", ",")[1]
+    @test create_cylinder!(d, 10, 15, 5, 1, 4, DirZ(); name = rod, color = SubString("copper.", 1, 6)) == 7
+    @test list_objects(d)[end].name == "rod" && list_objects(d)[end].object.material.color == "copper"
+    @test create_electric_charge!(d, 5, 5, 5; charge = 1e-9, name = SubString("q1 ", 1, 2)) == 8
+end
+
+@testset "history: change_resolution checks the sources" begin
+    # a loop that fits the fine grid but not the coarse one, whose nodes[end-2] lies
+    # lower, and a polyline whose points all snap to one coarse node: an error that
+    # names the source, and the original unchanged
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_circular_loop_source!(d, 0.45, 0.5, 0.5, 0.4, DirZ(); name = "coil")   # u + R = 0.85 ≤ 0.9
+    @test_throws "source \"coil\" (obj_id 1) does not fit this grid" change_resolution(d, 0.1)   # ≤ 0.8
+    @test_throws "does not fit in the domain in u-direction" change_resolution(d, 0.1)
+    @test length(d._history.steps) == 1
+    @test change_resolution(d, 0.025) isa FITDomain                      # finer: it fits
+    remove_object!(d, "coil")                                            # removed sources are not checked
+    @test change_resolution(d, 0.1) isa FITDomain
+
+    p = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    quiet(() -> create_polyline_source!(p, [(0.45, 0.45, 0.5), (0.55, 0.45, 0.5), (0.55, 0.55, 0.5)];
+                                        closed = true, name = "tiny"))
+    @test_throws "source \"tiny\" (obj_id 1) does not fit this grid: the polyline collapses" change_resolution(p, 0.25)
 end
 
 @testset "history: complex current" begin
     mk(res) = create_domain([20.0, 30.0, 30.0], res)
-    loop!(d, I, name) = create_circular_loop_source!(d, 8.0, 10.3, 15.2, 14.9, DirX();
+    loop!(d, I, name) = create_circular_loop_source!(d, 10.3, 15.2, 14.9, 8.0, DirX();
                                                      current=I, name=name)
     d = mk([1.0, 0.5, 0.5])
     create_brick!(d, 0, 0, 0, 4, 4, 4; σ=5.8e7, name="plate")
@@ -543,4 +577,29 @@ end
     @test_throws ArgumentError get_source(d, "ac")
     @test_logs undo!(d)
     @test get_source(d, "ac") == Jc
+end
+
+@testset "history: change_resolution with tori, helices and cut-outs" begin
+    build!(d) = (create_brick!(d, 0.2, 0.2, 0.2, 0.6, 0.6, 0.6; μ_r = 100.0, name = "core");
+                 create_brick!(d, 0.3, 0.2, 0.3, 0.4, 0.6, 0.4; color = "background", name = "window");
+                 create_torus!(d, 0.5, 0.5, 0.9, 0.2, 0.05, DirZ(); ε_r = 3.0, name = "ring");
+                 create_helix!(d, 0.5, 0.5, 0.05, 0.3, 0.04, 0.15, 1.5, DirZ(); σ = 1e6, name = "coil"); d)
+    coarse = build!(create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05]; ε_r = 2.0))
+    fine = @test_logs change_resolution(coarse, 0.025)
+    direct = build!(create_domain([1.0, 1.0, 1.0], [0.025, 0.025, 0.025]; ε_r = 2.0))
+    @test fine.material == direct.material
+    @test fine._history.steps == coarse._history.steps
+    # the cut-out took the background of the domain, ε_r = 2, on both grids
+    @test all(fine.material[13:28, 9:32, 13:28, 2] .== 2.0) && all(fine.material[13:28, 9:32, 13:28, 3] .== 1.0)
+    @test count(fine.material[:, :, :, 2] .== 3.0) > 0 && count(fine.material[:, :, :, 1] .== 1e6) > 0
+    # the helix ends are geometry, not grid: the same on both
+    @test get_helix_ends(fine, "coil") == get_helix_ends(coarse, "coil")
+    # removing and undoing the new objects replays the rest
+    remove_object!(fine, "coil")
+    @test count(fine.material[:, :, :, 1] .== 1e6) == 0
+    undo!(fine)
+    @test fine.material == direct.material
+    undo!(fine); undo!(fine)                                            # the helix, then the torus
+    @test [e.name for e in list_objects(fine)] == ["core", "window"]
+    @test count(fine.material[:, :, :, 2] .== 3.0) == 0
 end
