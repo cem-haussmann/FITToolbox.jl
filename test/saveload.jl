@@ -306,6 +306,15 @@ end
                 (t -> t["steps"][3]["closed"] = 1,             "step 3: \"closed\" must be true or false"),
                 (t -> t["steps"][3]["type"] = "Polyline",      "step 3: unknown object type \"Polyline\""),
                 (t -> t["steps"][3]["op"] = "remove",          "step 3: unknown op \"remove\""),
+                # TOML has inf and nan; no value of a domain file may be either
+                (t -> t["steps"][1]["radius"] = Inf,           "step 1: \"radius\" must be finite, got Inf"),
+                (t -> t["steps"][1]["base"] = [0.5, NaN, 0.1], "step 1: \"base\" must be finite"),
+                (t -> t["steps"][2]["current"] = -Inf,         "step 2: \"current\" must be finite"),
+                (t -> t["domain"]["eps_r"] = NaN,              "[domain]: \"eps_r\" must be finite"),
+                # materials that are not physical, with their place in the file
+                (t -> t["steps"][1]["mu_r"] = 0.0,             "step 1: relative permeability μ_r must be finite and positive"),
+                (t -> t["steps"][1]["sigma"] = -1.0,           "step 1: conductivity σ must be finite and not negative"),
+                (t -> t["domain"]["eps_r"] = -2.0,             "[domain]: relative permittivity ε_r must be finite and positive"),
                 # valid values, but a source that does not fit the grid of the file
                 (t -> t["steps"][2]["radius"] = 0.6,           "source \"coil\" (obj_id 2) does not fit this grid"))
             @test occursin(expected, message(f!))
@@ -429,5 +438,34 @@ end
         @test fine_e.material == fine_d.material
         @test fine_e._history.steps == fine_d._history.steps
         @test get_helix_ends(fine_e, "coil") == get_helix_ends(d, "coil")
+    end
+end
+
+@testset "save/load: objects outside the grid of an edited file" begin
+    # a file whose grid was made smaller by hand: an object of the history that lies
+    # outside the new extent is an error that names the file and the object, as for the
+    # sources, never a model with the object silently missing
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    create_brick!(d, 0, 0, 0, 0.2, 0.2, 0.2; name = "base")
+    create_sphere!(d, 0.8, 0.5, 0.5, 0.1; ε_r = 4.0, name = "ball")
+    create_circular_loop_source!(d, 0.5, 0.8, 0.5, 0.1, DirX(); name = "coil")
+    mktempdir() do dir
+        path = save_domain(joinpath(dir, "edited.toml"), d)
+        t = TOML.parsefile(path)
+        t["domain"]["edges_u"] = fill(0.05, 8)                           # 0.4 m instead of 1 m
+        open(io -> TOML.print(io, t), path, "w")
+        @test_throws "$path: object \"ball\" (obj_id 2) does not fit this grid: the sphere lies outside the domain: it spans u = 0.7 … 0.9 m, the domain u = 0.0 … 0.4 m" load_domain(path)
+        # without the sphere, the loop no longer fits either
+        t["steps"] = t["steps"][[1, 3]]
+        open(io -> TOML.print(io, t), path, "w")
+        @test_throws "$path: source \"coil\" (obj_id 3) does not fit this grid" load_domain(path)
+        # and smaller still, the brick at the origin reaches in, clipped
+        t["steps"] = t["steps"][[1]]
+        t["steps"][1]["eps_r"] = 3.0
+        t["domain"]["edges_u"] = fill(0.05, 2)                           # 0.1 m
+        open(io -> TOML.print(io, t), path, "w")
+        e = @test_logs (:warn, r"clipped") load_domain(path)
+        @test only(list_objects(e)).name == "base"
+        @test findall(==(3.0), e.material[:, :, :, 2]) == vec(CartesianIndices((2, 4, 4)))   # u = 0 … 0.1 m
     end
 end

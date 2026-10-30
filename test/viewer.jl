@@ -2,8 +2,8 @@
 #06/10/2026
 #
 # Tests for view_domain (ext/ViewDomain.jl) that need no rendering: CI has no GPU,
-# so the 3D drawing itself is checked by hand with GLMakie. Included from runtests.jl,
-# where CairoMakie is the active backend.
+# so the 3D drawing itself is checked by hand with GLMakie, by manual_glmakie.jl.
+# Included from runtests.jl, where CairoMakie is the active backend.
 
 using FITToolbox, Test, CairoMakie, LinearAlgebra
 
@@ -452,6 +452,31 @@ end
     @test m.position[2 + 1*3] ≈ Point3f(0.5, 0.8, 0.25)                 # vertex i + (j-1)·length(xs)
 end
 
+@testset "view_domain fields: the colour range over every node" begin
+    # The range is taken from the field at every grid node, computed by index rather than
+    # by searching the position: the same values interpolate gives there, for every
+    # entity, on a graded grid
+    g = create_domain([0.1, 0.25, 0.15], [0.2, 0.1], [0.05, 0.3, 0.1, 0.2])
+    for entity in (PrimalNode(), DualNode(), PrimalEdge(), DualEdge(), PrimalFacet(), DualFacet())
+        n = entity isa Union{PrimalNode, DualNode} ? g.Np : 3g.Np
+        data = [sin(1.3p) for p in 1:n]
+        lattice = _VIEW._node_lattice(g, entity)
+        @test all(Iterators.product(1:g.Nu, 1:g.Nv, 1:g.Nw)) do (i, j, k)
+            v = _VIEW._node_value(g, lattice, data, i, j, k)
+            v == interpolate(g, entity, data, g.nodes_u[i], g.nodes_v[j], g.nodes_w[k])
+        end
+    end
+    # A peak on one edge, as at the feed of an antenna, is found however large the grid:
+    # its nodes show half of it (the mean of the edge and its neighbour). A subset of the
+    # nodes, as before, missed it on a grid of a million nodes.
+    d = create_domain([1.0, 1.0, 1.0], [0.01, 0.01, 0.01])
+    E = fill(1e-3 * 0.01, 3d.Np)                                       # 1 mV/m on 1 cm edges
+    E[get_index_entity(d, PrimalEdge(), DirX(), 0.505, 0.5, 0.5)] = 0.01           # 1 V/m
+    f = only(_VIEW._field_specs(d, ("E" => (E, PrimalEdge()),)))
+    @test _VIEW._global_stats(d, f, "magnitude", "instantaneous")[2] ≈ hypot(0.5 + 0.5e-3, 1e-3, 1e-3)
+    @test all(_VIEW._global_stats(d, f, "x", "instantaneous")[1:2] .≈ (1e-3, 0.5 + 0.5e-3))
+end
+
 @testset "view_domain fields: values and colour ranges" begin
     d = _field_domain()
     scalar = (vector = false, complex = true)
@@ -486,8 +511,6 @@ end
     @test all(_VIEW._global_stats(d, E, "y", "instantaneous")[1:2] .≈ (-abs(E0[2]), abs(E0[2])))
     @test all(_VIEW._global_stats(d, E, "y", "real part") .≈ (-2.0, -2.0, Inf))   # one value, negative
     @test _VIEW._global_stats(d, E, "x", "phase")[1:2] == (-180.0, 180.0)
-    @test _VIEW._global_stats(d, E, "magnitude", "instantaneous"; max_points = 10) ==
-          _VIEW._global_stats(d, E, "magnitude", "instantaneous")       # a subset of the nodes
     @test isequal(_VIEW._slice_stats([-3.0, 1.0, NaN]), (-3.0, 1.0, 1.0))
     @test isequal(_VIEW._slice_stats([NaN]), (NaN, NaN, NaN))
     @test _VIEW._is_magnitude(E, "magnitude", "real part") && _VIEW._is_magnitude(E, "x", "magnitude")
@@ -511,12 +534,63 @@ end
     @test _VIEW._range_from((0.0, 2.0, 1e-9), true, true) == (2e-6, 2.0)
     @test _VIEW._range_from((-1.0, 2.0, 1.0), false, true) == (-2.0, 2.0)  # both signs: no log
     @test _VIEW._range_from((NaN, NaN, NaN), true, true) == (0.1, 1.0)
-    # the range slider keeps the end nearest to zero
-    @test all(_VIEW._narrowed((-2.0, 2.0), 0.1, false) .≈ (-0.2, 0.2))
-    @test all(_VIEW._narrowed((0.0, 2.0), 0.1, false) .≈ (0.0, 0.2))
-    @test all(_VIEW._narrowed((5.0, 6.0), 0.1, false) .≈ (5.0, 5.1))
-    @test all(_VIEW._narrowed((-1.6, -0.6), 0.1, false) .≈ (-0.7, -0.6))
-    @test all(_VIEW._narrowed((0.01, 2.0), 0.1, true) .≈ (0.001, 0.2))    # log: shifted down
+    # limits set by the user in place of the automatic ends; nothing: automatic
+    @test _VIEW._limited((-2.0, 2.0), (nothing, nothing), false) == (-2.0, 2.0)
+    @test _VIEW._limited((-2.0, 2.0), (-0.5, nothing), false) == (-0.5, 2.0)
+    @test _VIEW._limited((0.0, 2.0), (nothing, 10.0), false) == (0.0, 10.0)      # beyond it
+    @test _VIEW._limited((0.0, 2.0), (1.5, 1.0), false) == (1.5, 2.0)           # crossed: one kept
+    @test _VIEW._limited((0.0, 2.0), (3.0, 4.0), false) == (3.0, 4.0)
+    @test _VIEW._limited((0.01, 2.0), (-1.0, nothing), true) == (0.01, 2.0)     # log: nothing ≤ 0
+    @test _VIEW._limited((0.01, 2.0), (-1.0, -0.5), true) == (0.01, 2.0)        # neither fits: automatic
+    @test _VIEW._limit_positions((0.01, 10.0), true; n = 5) ≈ [0.01, 0.0562, 0.316, 1.778, 10.0] rtol = 1e-3
+    @test _VIEW._parse_limit(" 2.5e-3 ") == 2.5e-3 && _VIEW._parse_limit("") === nothing
+    @test _VIEW._valid_limit("") && _VIEW._valid_limit("-1e3") && !_VIEW._valid_limit("1,5")
+end
+
+@testset "view_domain fields: the limits of the colour range" begin
+    d = _field_domain()
+    Φ = _node_field(d, (x, y, z) -> 10x - 5)                            # -5 … 5 V
+    E0 = (1.0, -2.0, 0.5)
+    fig, st = _VIEW._view_figure(d, "Φ (V)" => (Φ, PrimalNode()),
+                                 "E" => (_uniform_edges(d, E0), PrimalEdge()))
+    f = st.field
+    f.on.checked[] = true
+    @test all(f.colorrange[] .≈ (-5.0, 5.0)) && f.limits[] == (nothing, nothing)
+    @test f.min_box.displayed_string[] == "-5.0" && f.max_box.displayed_string[] == "5.0"
+    # typed: either end alone, also beyond the field
+    f.min_box.stored_string[] = "-1"
+    @test all(f.colorrange[] .≈ (-1.0, 5.0)) && f.signed[]
+    f.max_box.stored_string[] = "20"
+    @test all(f.colorrange[] .≈ (-1.0, 20.0))
+    @test f.range_slider.interval[][2] ≈ 5.0                             # beyond the slider: at its end
+    f.max_box.stored_string[] = ""                                       # empty: automatic
+    @test all(f.colorrange[] .≈ (-1.0, 5.0)) && f.limits[] == (-1.0, nothing)
+    # dragged: both handles; one at the end of the slider is automatic
+    set_close_to!(f.range_slider, 1.0, 5.0)
+    @test f.limits[][2] === nothing && !f.signed[]
+    @test f.limits[][1] ≈ 1.0 atol = 0.02
+    @test f.colorrange[][1] ≈ 1.0 atol = 0.02
+    # kept when the plane moves, reset by "auto"
+    slider = only(b for b in fig.content if b isa Slider && b.range[] == d.nodes_w)
+    set_close_to!(slider, d.nodes_w[2])
+    @test f.colorrange[][1] ≈ 1.0 atol = 0.02
+    f.auto_button.clicks[] = 1
+    @test f.limits[] == (nothing, nothing) && all(f.colorrange[] .≈ (-5.0, 5.0))
+    # automatic again for another field or quantity: other values, other units
+    f.min_box.stored_string[] = "0"
+    f.field_menu.i_selected[] = 2
+    @test f.limits[] == (nothing, nothing) && all(f.colorrange[] .≈ (0.0, hypot(E0...)))
+    # scaled arrows follow the upper limit: half the range, twice the length (at most 0.8 h)
+    f.arrows[] = true; f.scaled[] = true
+    len() = maximum(norm, filter(v -> all(isfinite, v), last(f.arrow_data[])))
+    full = len()
+    f.max_box.stored_string[] = string(2 * hypot(E0...))
+    @test len() ≈ full / 2 rtol = 1e-3
+    # on a log scale the slider runs in decades
+    f.max_box.stored_string[] = ""
+    f.log[] = true
+    pos = f.range_slider.range[]
+    @test pos[2] / pos[1] ≈ pos[end] / pos[end-1] && f.plot.colorscale[] == log10
 end
 
 @testset "view_domain fields: the panel" begin
@@ -616,10 +690,11 @@ end
     f.field_menu.i_selected[] = 3
     @test f.time_text[] == "static field"
 
-    # the range slider narrows the colour range, here by 10
-    f.range_slider.value[] = -1
+    # an upper limit typed for the colour range
     lo, hi = extrema(g)                                                   # all positive
+    f.max_box.stored_string[] = string(lo + (hi - lo) / 10)
     @test all(f.colorrange[] .≈ (lo, lo + (hi - lo) / 10))
+    f.auto_button.clicks[] = 1
 
     # one step of play: on to the next snapshot, after the last back to the first; a
     # static field stays
@@ -635,6 +710,69 @@ end
     f.play.clicks[] += 1
     sleep(0.3)
     @test f.time_slider.value[] == k && !f.playing[] && f.play.label[] == "play"
+
+    # the speed of play: 2 snapshots per second unless chosen otherwise
+    @test f.speed_menu.selection[] == 2.0
+    f.speed_menu.i_selected[] = 1
+    @test f.speed_menu.selection[] == 0.5
+    # a step waits until its time, but stops waiting as soon as play is paused, and
+    # follows a deadline that moves (another speed)
+    t0 = time()
+    t = @elapsed _VIEW._wait_until(() -> t0 + 0.3, () -> true)
+    @test 0.3 <= t < 1.0
+    t = @elapsed _VIEW._wait_until(() -> time() + 10, () -> false)
+    @test t < 0.1
+    going = Ref(true)
+    @async (sleep(0.2); going[] = false)
+    t = @elapsed _VIEW._wait_until(() -> time() + 10, () -> going[])
+    @test t < 1.0
+    t0, later = time(), Ref(10.0)
+    @async (sleep(0.2); later[] = 0.3)
+    t = @elapsed _VIEW._wait_until(() -> t0 + later[], () -> true)
+    @test t < 1.0
+
+    # playing, as in a window: a CairoMakie scene has none, so the test says it is open.
+    # The bounds leave room for a slow machine.
+    open_window = events(st.ls.scene).window_open
+    open_window[] = true
+    steps = Ref(0)
+    counter = on(_ -> steps[] += 1, f.step)
+    played(speed, seconds) = begin
+        f.speed_menu.i_selected[] = findfirst(s -> s[2] == speed, _VIEW._PLAY_SPEEDS)
+        steps[] = 0
+        f.play.clicks[] += 1
+        sleep(seconds)
+        f.play.clicks[] += 1
+        steps[]
+    end
+    fast, slow = played(10.0, 1.0), played(1.0, 1.0)
+    @test 3 <= fast <= 11
+    @test 1 <= slow <= 2
+    sleep(0.2)
+    @test !f.playing[] && f.play.label[] == "play"
+    # a step at the slowest speed: another speed counts at once, not after 2 s
+    f.speed_menu.i_selected[] = 1
+    steps[] = 0
+    f.play.clicks[] += 1
+    sleep(0.3)
+    f.speed_menu.i_selected[] = 5
+    sleep(0.7)
+    @test steps[] >= 3
+    # pause and at once play again: the run paused ends, and must not stop the new one
+    f.play.clicks[] += 1
+    f.play.clicks[] += 1
+    sleep(0.3)
+    @test f.playing[] && f.play.label[] == "pause"
+    f.play.clicks[] += 1
+    sleep(0.2)
+    @test !f.playing[]
+    # closing the window stops play
+    f.play.clicks[] += 1
+    sleep(0.2)
+    open_window[] = false
+    sleep(0.3)
+    @test !f.playing[]
+    off(counter)
 end
 
 @testset "view_domain: tori" begin
@@ -790,7 +928,9 @@ end
     create_cylinder!(d, 0.1, 0.2, 0.2, 0.03, 0.15, DirZ(); name = "riser", wire...)
     create_cylinder!(d, 0.3, 0.2, 0.05, 0.03, 0.1, DirZ(); σ = 1.0, color = "copper", name = "other")
     create_brick!(d, 0.25, 0.05, 0.05, 0.1, 0.1, 0.1; name = "apart", wire...)
-    create_sphere!(d, 0.2, 0.2, 0.2, 0.01; color = "background", name = "hole")
+    # smaller than a cell: no voxel, but a surface in the combined view
+    @test_logs (:warn, r"no cells were filled") create_sphere!(d, 0.2, 0.2, 0.2, 0.01;
+                                                               color = "background", name = "hole")
     g = _VIEW._combined_grid(d)
     h = _VIEW._step(g[1])
     groups = _VIEW._combined_groups(d, g)
@@ -1015,4 +1155,143 @@ end
     @test all(≈(0.5), f.values[])
     f.field_menu.i_selected[] = 2
     @test f.signed[] && all(f.colorrange[] .≈ (-1.0, 1.0))               # Φ = x - y: -0.8 … 1 V, about zero
+end
+
+@testset "view_domain: the voxel cut is made from the faces, not the grid" begin
+    # The faces are found once; a cut keeps those of the cells before it and closes the
+    # cut with the cross-section. Against a scan of the grid with the cells beyond the cut
+    # counted as empty, as before, on random labels, along every axis, at every node.
+    g = create_domain([0.1, 0.2, 0.15, 0.1], [0.1, 0.05, 0.2], [0.2, 0.1, 0.1, 0.05, 0.1])
+    lab = [UInt8[0, 0, 1, 2, 3][mod1(7i + 13j + 5k + i * j * k, 5)] for i in 1:4, j in 1:3, k in 1:5]
+    function scanned(lab, axis, m)                            # the scan, as a set of faces
+        n = size(lab)
+        l(i, j, k) = (1 <= i <= n[1] && 1 <= j <= n[2] && 1 <= k <= n[3] &&
+                      (i, j, k)[axis] <= m) ? lab[i, j, k] : 0
+        nodes = (g.nodes_u, g.nodes_v, g.nodes_w)
+        out = Dict{Int,Set{Any}}()
+        for k in 1:n[3], j in 1:n[2], i in 1:n[1]
+            id = l(i, j, k); id == 0 && continue
+            for (quad, (di, dj, dk)) in _VIEW._CELL_FACES
+                l(i + di, j + dj, k + dk) == id && continue
+                P = Point3f[]; _VIEW._push_face!(P, nodes, i, j, k, quad)
+                push!(get!(Set{Any}, out, id), Tuple(P))      # the corners in their order
+            end
+        end
+        return out
+    end
+    faces_of(m) = Set{Any}(Tuple(m.position[4q-3:4q]) for q in 1:length(m.position) ÷ 4)
+    F = _VIEW._voxel_faces(g, lab)
+    for axis in 1:3, m in 0:size(lab, axis)
+        cut = _VIEW._voxel_cut(g, lab, F; keep = (axis, m))
+        @test Dict(id => faces_of(mesh) for (id, mesh) in cut) == scanned(lab, axis, m)
+    end
+    @test Dict(id => faces_of(m) for (id, m) in _VIEW._voxel_cut(g, lab, F)) == scanned(lab, 1, 4)
+end
+
+@testset "view_domain: voxel labels in the smallest integer type" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.25, 0.25, 0.25])
+    create_brick!(d, 0, 0, 0, 0.5, 0.5, 0.5)
+    @test eltype(_VIEW._owner_labels(d)) == UInt8                       # obj_id ≤ 255: a byte per cell
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    quiet(() -> for _ in 1:300; create_brick!(d, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5); end)
+    lab = _VIEW._owner_labels(d)
+    @test eltype(lab) == UInt16 && lab[4, 4, 4] == 301 && lab[1, 1, 1] == 1
+end
+
+# snapshots read when indexed, e.g. from a file; each read is noted
+struct _Series <: AbstractVector{Vector{Float64}}
+    n::Int; len::Int; reads::Vector{Int}
+end
+Base.size(s::_Series) = (s.n,)
+Base.getindex(s::_Series, k::Int) = (push!(s.reads, k); [Float64(k) for _ in 1:s.len])
+
+@testset "view_domain fields: a time series read on demand" begin
+    # opening the view reads the first snapshot only, showing a step reads that one, and
+    # the colour range reads each once
+    d = _field_domain()
+    s = _Series(5, d.Np, Int[])
+    fig, st = _VIEW._view_figure(d, "Φ" => (s, PrimalNode(), collect(1.0:5)))
+    @test s.reads == [1] && st.field.field[].snapshots === s           # not copied
+    empty!(s.reads)
+    st.field.on.checked[] = true                                         # shown: step 1, and the range
+    @test sort(unique(s.reads)) == 1:5 && count(==(1), s.reads) == 2
+    @test all(st.field.colorrange[] .≈ (1.0, 5.0))                    # the snapshots hold 1 … 5
+    empty!(s.reads)
+    set_close_to!(st.field.time_slider, 3)
+    @test s.reads == [3]                                                 # the range is kept
+    # a series in memory is still checked whole
+    @test_throws "has length 3" _VIEW._field_specs(d, ("Φ" => ([zeros(d.Np), zeros(3)], PrimalNode(), [0.0, 1.0]),))
+end
+
+@testset "view_domain: many objects are drawn by colour" begin
+    # above 15 objects a plot per colour and view instead of per object: Makie slows down
+    # with thousands of plots. Shown or hidden still per object, and a click names it.
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    quiet() do
+        for k in 1:20
+            create_sphere!(d, 0.1 + 0.04k, 0.5, 0.3, 0.06; color = isodd(k) ? "copper" : "gold")
+        end
+        create_brick!(d, 0.1, 0.1, 0.7, 0.3, 0.3, 0.2; color = "background")
+        create_circular_loop_source!(d, 0.5, 0.5, 0.6, 0.2, DirZ(); name = "coil")
+        create_rectangular_loop_source!(d, 0.2, 0.2, 0.8, 0.2, 0.2, DirZ())
+        create_electric_charge!(d, 0.5, 0.5, 0.9; charge = 1.0)
+        create_electric_charge!(d, 0.6, 0.5, 0.9; charge = -1.0)
+    end
+    fig, st = _VIEW._view_figure(d)
+    plots = [p for p in st.ls.scene.plots if haskey(st.plot_ids, p)]
+    # solids: copper, gold and the cut-out as defined; copper and gold as voxels and
+    # combined; two loops of two colours: line, edges, arrows each; two charges of two
+    # colours, as given and on their node
+    @test length(plots) == 3 + 2 + 2 + 2 * 3 + 2 * 2
+    # in order: as defined, voxels, combined
+    copper, vox = [g for g in st.merged if g.ids == collect(1:2:19)][1:2]
+    @test length(copper.ranges) == 10
+    mesh_of(id) = only(first(r) for r in copper.ranges if last(r) == id)
+    @test !any(p -> any(isnan, p), copper.data[].position)
+    st.shown[3][] = false                                                # hidden: its points NaN
+    @test all(p -> all(isnan, p), copper.data[].position[mesh_of(3)])
+    @test !any(p -> any(isnan, p), copper.data[].position[mesh_of(5)])
+    plt = only(p for (p, g) in st.plot_ids if g === copper)
+    @test _VIEW._picked_id(st.plot_ids, plt, first(mesh_of(7))) == 7    # a click names the object
+    @test _VIEW._picked_id(st.plot_ids, plt, 0) === nothing
+    # Show all: one rebuild of each plot, not one per object
+    rebuilds = Ref(0)
+    on(_ -> rebuilds[] += 1, copper.data)
+    st.shown[5][] = false
+    rebuilds[] = 0
+    only(b for b in fig.content if b isa Button && b.label[] == "Show all").clicks[] = 1
+    @test rebuilds[] == 1 && !any(p -> any(isnan, p), copper.data[].position)
+    # the voxels of the shown objects of a colour, in one mesh
+    st.voxel_mode[] = true
+    nvox(ids) = sum(id -> st.voxels[id][] === _VIEW._EMPTY_VOXELS ? 0 : length(st.voxels[id][].position), ids)
+    @test nvox(1:2:19) > 0 && length(vox.data[].position) == nvox(1:2:19)
+    st.shown[1][] = false
+    @test length(vox.data[].position) == nvox(3:2:19)
+    # the sources and charges: their points, NaN when hidden
+    line = only(g for g in st.merged if g.ids == [22] && g.data[] isa Vector{Point3f} &&
+                length(g.data[]) == length(_VIEW._loop_points(list_objects(d)[22].object)) + 1)
+    st.shown[22][] = false
+    @test all(p -> all(isnan, p), line.data[])
+    dots = [g for g in st.merged if g.ids == [24]]
+    @test length(dots) == 2 && all(g -> !any(isnan, only(g.data[])), dots)
+    # a loop's grid edges and arrows hide with it (line, edges, arrow positions and
+    # directions), and come back with Show all
+    parts = [g for g in st.merged if g.ids == [22]]
+    @test length(parts) == 4 && all(g -> all(p -> all(isnan, p), g.data[]), parts)
+    only(b for b in fig.content if b isa Button && b.label[] == "Show all").clicks[] = 1
+    @test all(g -> !any(p -> any(isnan, p), g.data[]), parts[2:4])       # the line keeps its separator
+    # a click on a line or a marker names its object
+    plot_of(g) = only(p for (p, x) in st.plot_ids if x === g)
+    @test _VIEW._picked_id(st.plot_ids, plot_of(line), 3) == 22
+    @test _VIEW._picked_id(st.plot_ids, plot_of(first(dots)), 1) == 24
+    # the combined surfaces of the shown objects of a colour, in one mesh
+    st.voxel_mode[] = false; st.combined_mode[] = true
+    shape = [g for g in st.merged if g.ids == collect(1:2:19)][3]
+    nshape(ids) = sum(id -> st.shapes[id][] === _VIEW._EMPTY_VOXELS ? 0 : length(st.shapes[id][].position), ids)
+    @test nshape(1:2:19) > 0 && length(shape.data[].position) == nshape(1:2:19)
+    st.shown[3][] = false
+    @test length(shape.data[].position) == nshape(setdiff(1:2:19, 3))
+    # the cut-out: one plot of its own, transparent
+    @test plot_of(only(g for g in st.merged if g.ids == [21])).transparency[]
 end

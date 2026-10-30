@@ -2,8 +2,6 @@
 #Norman Haussmann (haussmann@uni-wuppertal.de), Chair of Electromagnetic Theory, University of Wuppertal
 #Date: 07/08/2026
 
-using SparseArrays
-
 
 """
     DomainFace
@@ -71,13 +69,16 @@ struct NodalComponent <: BoundaryComponent end
     DomainBoundary
 
 A face of the domain as a tuple `(normal, side)`, e.g. `(DirX(), Positive())`. The
-boundary functions take a vector of them:
+boundary functions take a vector or a tuple of them:
 
 ```julia
 faces = [(n, s) for n in (DirX(), DirY(), DirZ()) for s in (Positive(), Negative())]   # all six
 ```
 """
 const DomainBoundary = Tuple{Direction, DomainFace}
+
+# the faces the boundary functions take: a vector or a tuple of them
+const _Faces = Union{AbstractVector{<:DomainBoundary}, Tuple{Vararg{DomainBoundary}}}
 
 # --- Nodal Components ---
 get_component_offsets(::Direction, ::NodalComponent, Np) = (0,)
@@ -103,8 +104,8 @@ end
 """
     get_boundary_matrix(config, faces, component) -> SparseMatrixCSC
 
-A diagonal projection that zeroes the entries of `component` on the `faces`, a vector of
-`(normal, side)` tuples (see `DomainBoundary`), and keeps all others: `Np × Np` for
+A diagonal projection that zeroes the entries of `component` on the `faces`, a vector or tuple
+of `(normal, side)` tuples (see `DomainBoundary`), and keeps all others: `Np × Np` for
 `NodalComponent()`, `3Np × 3Np` for `NormalComponent()` and `TangentialComponent()`.
 With `R` this matrix and `D = I - R`, `R*K*R + D` replaces the rows and columns of the
 boundary entries of a system matrix `K` by the identity: homogeneous Dirichlet
@@ -119,7 +120,7 @@ D = Diagonal(ones(domain.Np)) - R
 Φ = cholesky(D + R*L*R) \\ (R*q)                               # L = Gᵀ M_ε G
 ```
 """
-function get_boundary_matrix(config::FITDomain, faces::Vector{<:DomainBoundary}, component::BoundaryComponent)
+function get_boundary_matrix(config::FITDomain, faces::_Faces, component::BoundaryComponent)
     indices = get_custom_boundary_indices(config, faces, component)
     total_size = component isa NodalComponent ? config.Np : 3 * config.Np
     return _create_projection_matrix(indices, total_size)
@@ -237,11 +238,11 @@ end
 """
     get_custom_boundary_indices(config, faces, component) -> Vector{Int}
 
-The entries of `component` on all the `faces`, a vector of `(normal, side)` tuples (see
-`DomainBoundary`), sorted and without repetitions: the indices that
+The entries of `component` on all the `faces`, a vector or tuple of `(normal, side)`
+tuples (see `DomainBoundary`), sorted and without repetitions: the indices that
 `get_boundary_matrix` zeroes, e.g. the tangential edges of the walls that are PEC.
 """
-function get_custom_boundary_indices(config::FITDomain, faces::Vector{<:DomainBoundary}, component::BoundaryComponent)
+function get_custom_boundary_indices(config::FITDomain, faces::_Faces, component::BoundaryComponent)
     indices = Int[]
     
     for (normal, side) in faces

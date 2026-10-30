@@ -3,7 +3,7 @@
 #Date: 16/09/2025
 
 """
-    get_permittivity(config) -> SparseMatrixCSC    # M_ε, 3Np × 3Np, diagonal
+    get_permittivity(config) -> Diagonal    # M_ε, 3Np × 3Np
 
 The permittivity matrix `M_ε`: a diagonal matrix with one entry per primal edge, taking
 the edge voltages `ê` to the electric fluxes `d̂̂ = M_ε ê` through the dual facets the
@@ -18,6 +18,12 @@ positive semi-definite on the full `3Np` space: restrict it to the real edges, o
 diagonal pseudo-inverse (1/0 := 0), before inverting it. `get_conductivity` builds
 `M_σ` the same way.
 
+The matrix is a `Diagonal`, which stores only the `3Np` entries: a third of the memory
+of a `SparseMatrixCSC`. Products with the sparse operators, such as `G' * M_ε * G`,
+are sparse; `diag(M_ε)` gives the entries as a vector. Indexing it with index vectors,
+`M_ε[idx, idx]`, gives a dense matrix: use `Diagonal(diag(M_ε)[idx])` instead, or
+`sparse(M_ε)` where a sparse matrix is needed.
+
 # Example
 
 ```julia
@@ -29,6 +35,8 @@ function get_permittivity(config)
         return _get_dual_facet_averaged_material(config,2)
 end
 
+# Shorthand as in the equations, not exported: user code names its matrices M_ε
+# (`M_ε = get_permittivity(domain)`), which an exported function of that name would break
 function M_ε(config)
     return get_permittivity(config)
 end

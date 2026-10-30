@@ -30,7 +30,12 @@ function _field_specs(domain, fields)
         n = entity isa _NodalEntity ? domain.Np : 3 * domain.Np
         times = length(spec) == 3 ? collect(Float64, spec[3]) : nothing
         snapshots = times === nothing ? [data] : _snapshots(data)
-        for s in snapshots
+        # A series in memory is checked whole. Any other vector of snapshots may read each
+        # from a file when it is indexed: only its first is read here, the others when
+        # they are shown, so the series is never held in memory at once.
+        in_memory = times === nothing || data isa Union{Vector, AbstractMatrix}
+        checked = in_memory ? snapshots : (isempty(snapshots) ? snapshots : [first(snapshots)])
+        for s in checked
             length(s) == n && continue
             hint = times === nothing && eltype(data) <: AbstractVector ?
                    "; for snapshots give their times as well: (snapshots, entity, times)" : ""
@@ -41,13 +46,14 @@ function _field_specs(domain, fields)
             throw(ArgumentError("field \"$name\": $(length(snapshots)) snapshots, but \
                                  $(length(times)) times"))
         (name = string(name), snapshots = snapshots, times = times, entity = entity,
-         vector = entity isa _VectorEntity, complex = any(s -> eltype(s) <: Complex, snapshots))
+         vector = entity isa _VectorEntity, complex = any(s -> eltype(s) <: Complex, checked))
     end
 end
 
-# The snapshots of a time series: a vector of vectors, or the columns of a matrix
+# The snapshots of a time series: a vector of vectors, or the columns of a matrix. Not
+# copied: a vector that reads its snapshots on demand keeps doing so.
 _snapshots(data::AbstractMatrix) = [view(data, :, k) for k in axes(data, 2)]
-_snapshots(data::AbstractVector{<:AbstractVector}) = collect(data)
+_snapshots(data::AbstractVector{<:AbstractVector}) = data
 _snapshots(data) = throw(ArgumentError("snapshots are a vector of vectors or a matrix with \
                                         one snapshot per column, got $(typeof(data))"))
 
@@ -148,21 +154,76 @@ function _point_extent(v, f, quantity, mode)
 end
 
 # What the colours have to cover, as (smallest, largest, smallest positive value), over
-# the whole field and all its snapshots: from the field at the grid nodes, an evenly
-# spaced subset of them above `max_points` in all
-function _global_stats(domain, f, quantity, mode; max_points = 1_000_000)
+# the whole field and all its snapshots: from the field at every grid node, as the plane
+# shows it there. Each snapshot is read once. A subset of the nodes would miss a peak
+# narrower than its spacing, e.g. at a source edge, and leave its colours saturated.
+function _global_stats(domain, f, quantity, mode)
     f.complex && mode == "phase" && return (-180.0, 180.0, NaN)
-    s = max(1, ceil(Int, cbrt(domain.Np * length(f.snapshots) / max_points)))
+    lattice = _node_lattice(domain, f.entity)
     lo, hi, m_pos = Inf, -Inf, Inf
-    for data in f.snapshots, k in 1:s:domain.Nw, j in 1:s:domain.Nv, i in 1:s:domain.Nu
-        v = FITToolbox.interpolate(domain, f.entity, data,
-                                   domain.nodes_u[i], domain.nodes_v[j], domain.nodes_w[k])
-        a, b = _point_extent(v, f, quantity, mode)
-        (isfinite(a) && isfinite(b)) || continue
-        lo, hi = min(lo, a), max(hi, b)
-        b > 0 && (m_pos = min(m_pos, a > 0 ? a : b))
+    for data in f.snapshots
+        a, b, m = _scan_nodes(domain, lattice, data, f, quantity, mode)
+        lo, hi, m_pos = min(lo, a), max(hi, b), min(m_pos, m)
     end
     return (lo, hi, m_pos)
+end
+
+# How interpolate places each component of an entity, for the nodes of the grid: along
+# each axis, the positions of the component (the nodes, or the cell centres) and, for
+# every node, the index of the pair of positions around it; and what a value is divided
+# by, the length or area of the entity. With these the field at a node needs no search.
+_entity_scale(d, ::FITToolbox.PrimalEdge)  = ((i, j, k) -> d.edges_u[i], (i, j, k) -> d.edges_v[j],
+                                              (i, j, k) -> d.edges_w[k])
+_entity_scale(d, ::FITToolbox.DualEdge)    = ((i, j, k) -> d.dual_edges_u[i], (i, j, k) -> d.dual_edges_v[j],
+                                              (i, j, k) -> d.dual_edges_w[k])
+_entity_scale(d, ::FITToolbox.PrimalFacet) = ((i, j, k) -> d.primal_facets_u[j, k],
+                                              (i, j, k) -> d.primal_facets_v[i, k],
+                                              (i, j, k) -> d.primal_facets_w[i, j])
+_entity_scale(d, ::FITToolbox.DualFacet)   = ((i, j, k) -> d.dual_facets_u[j, k],
+                                              (i, j, k) -> d.dual_facets_v[i, k],
+                                              (i, j, k) -> d.dual_facets_w[i, j])
+_entity_scale(d, ::_NodalEntity)           = ((i, j, k) -> 1.0,)
+
+function _node_lattice(d, entity)
+    FR = FITToolbox.FieldReconstruction
+    nodes   = (d.nodes_u, d.nodes_v, d.nodes_w)
+    centres = (d.edges_u_center, d.edges_v_center, d.edges_w_center)
+    scale = _entity_scale(d, entity)
+    return ntuple(length(scale)) do c
+        dir = (FITToolbox.DirX(), FITToolbox.DirY(), FITToolbox.DirZ())[c]
+        centred = FITToolbox._centred(entity, dir)
+        pos = ntuple(a -> centred[a] ? centres[a] : nodes[a], 3)
+        # as interpolate finds them: the pair of centres around the node, or the cell
+        # from the node (the last node closes the last cell)
+        idx = ntuple(a -> centred[a] ? [FR._find_dual_index(centres[a], x) for x in nodes[a]] :
+                                       [min(i, length(nodes[a]) - 1) for i in eachindex(nodes[a])], 3)
+        (; dir, pos, idx, scale = scale[c])
+    end
+end
+
+# The field at node (i, j, k), as interpolate gives it there
+@inline _node_component(d, l, data, i, j, k) =
+    FITToolbox.FieldReconstruction._GetFieldValue(d, l.dir, data, l.pos...,
+        d.nodes_u[i], d.nodes_v[j], d.nodes_w[k], l.idx[1][i], l.idx[2][j], l.idx[3][k], l.scale)
+_node_value(d, lattice::Tuple{Any}, data, i, j, k) = _node_component(d, lattice[1], data, i, j, k)
+_node_value(d, lattice::NTuple{3,Any}, data, i, j, k) =
+    (_node_component(d, lattice[1], data, i, j, k), _node_component(d, lattice[2], data, i, j, k),
+     _node_component(d, lattice[3], data, i, j, k))
+
+# The extent over all nodes of one snapshot, a layer of nodes per thread
+function _scan_nodes(d, lattice, data, f, quantity, mode)
+    acc = fill((Inf, -Inf, Inf), d.Nw)
+    Threads.@threads for k in 1:d.Nw
+        lo, hi, m_pos = Inf, -Inf, Inf
+        for j in 1:d.Nv, i in 1:d.Nu
+            a, b = _point_extent(_node_value(d, lattice, data, i, j, k), f, quantity, mode)
+            (isfinite(a) && isfinite(b)) || continue
+            lo, hi = min(lo, a), max(hi, b)
+            b > 0 && (m_pos = min(m_pos, a > 0 ? a : b))
+        end
+        acc[k] = (lo, hi, m_pos)
+    end
+    return (minimum(first, acc), maximum(x -> x[2], acc), minimum(last, acc))
 end
 
 # The same for the values on the plane
@@ -195,13 +256,29 @@ function _range_from(stats, magnitude, log)
     return (lo, hi)
 end
 
-# The range narrowed by the factor s of the range slider, keeping its end nearest to
-# zero, so that the weak values spread over the colours; a log range shifts down
-function _narrowed(rng, s, log)
-    lo, hi = rng
-    (log || lo <= 0 <= hi) && return (lo * s, hi * s)
-    return hi <= 0 ? (hi - (hi - lo) * s, hi) : (lo, lo + (hi - lo) * s)
+# The colour range: the automatic one `auto`, with the limits the user set (`nothing`:
+# automatic) in place of its ends. Limits that leave no range, or a log scale nothing
+# above zero, fall back to the automatic ends.
+function _limited(auto, limits, log)
+    lo, hi = something(limits[1], auto[1]), something(limits[2], auto[2])
+    (lo < hi && (!log || lo > 0)) && return (Float64(lo), Float64(hi))
+    lo = something(limits[1], auto[1])                # the lower limit alone, if it fits
+    (lo < auto[2] && (!log || lo > 0)) && return (Float64(lo), Float64(auto[2]))
+    hi = something(limits[2], auto[2])                # or the upper one
+    (auto[1] < hi) && return (Float64(auto[1]), Float64(hi))
+    return Float64.(auto)
 end
+
+# The positions of the range slider over the automatic range: evenly spaced, or in
+# decades on a log scale, so that weak values are within reach
+_limit_positions(auto, log; n = 501) =
+    log ? exp10.(range(log10(auto[1]), log10(auto[2]); length = n)) :
+          collect(range(auto[1], auto[2]; length = n))
+
+# A limit as shown in its box, and read from it: empty is automatic
+_limit_text(x) = string(round(x; sigdigits = 4))
+_parse_limit(s) = (s === nothing || isempty(strip(s))) ? nothing : tryparse(Float64, strip(s))
+_valid_limit(s) = isempty(strip(s)) || tryparse(Float64, strip(s)) !== nothing
 
 # The plane as a mesh through the sample points; vertex i + (j-1)·length(xs) is (xs[i], ys[j])
 function _plane_mesh(axis::Int, pos, xs, ys)
@@ -270,6 +347,19 @@ function _next_step!(slider, f)
     return slider.value[]
 end
 
+# The speeds of "play", in snapshots per second
+const _PLAY_SPEEDS = [("0.5 / s", 0.5), ("1 / s", 1.0), ("2 / s", 2.0), ("5 / s", 5.0), ("10 / s", 10.0)]
+const _PLAY_SPEED_DEFAULT = "2 / s"
+
+# Waits until `deadline()` (in `time()`), in short naps: `go()` turning false, e.g. on
+# pause, ends the wait at once, and a deadline that moves, e.g. with the speed, counts
+# at once
+function _wait_until(deadline, go)
+    while go() && time() < deadline()
+        sleep(min(0.05, max(0.001, deadline() - time())))
+    end
+end
+
 # --- The plane and its panel section -------------------------------------------
 
 function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
@@ -288,16 +378,25 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
         phase = Slider(panel[row += 1, 2:3]; range = 0:5:360, startvalue = 0)
         Label(panel[row, 1], lift(p -> "$(p)°", phase.value); halign = :left)
     end
-    time_slider = play = nothing
+    time_slider = play = speed_menu = nothing
     if any_series                                    # the time itself is in the colour bar label
         first_series = specs[findfirst(f -> f.times !== nothing, specs)]
         play = _button(panel[row += 1, 1], "play")
         time_slider = Slider(panel[row, 2:3]; range = 1:max(2, length(first_series.times)),
                              startvalue = 1)
+        Label(panel[row += 1, 1], "speed"; halign = :left)
+        speed_menu = Menu(panel[row, 2:3]; options = _PLAY_SPEEDS, default = _PLAY_SPEED_DEFAULT)
     end
-    range_exp = Slider(panel[row += 1, 2:3]; range = -3:0.1:0, startvalue = 0)
-    Label(panel[row, 1], lift(e -> "×$(round(10.0^e; sigdigits = 2))", range_exp.value);
-          halign = :left)
+    # the colour range: its limits on a slider over the automatic range, or typed in.
+    # An end at the end of the slider, or left empty, follows the field; "auto" both.
+    auto_button = _button(panel[row += 1, 1], "auto")
+    limit_slider = IntervalSlider(panel[row, 2:3]; range = _limit_positions((-1.0, 1.0), false),
+                                  startvalues = (-1.0, 1.0))
+    boxes = GridLayout(panel[row += 1, 1:3]; halign = :left)
+    Label(boxes[1, 1], "min"; halign = :left)
+    min_box = Textbox(boxes[1, 2]; placeholder = "auto", validator = _valid_limit, width = 72)
+    Label(boxes[1, 3], "max"; halign = :left)
+    max_box = Textbox(boxes[1, 4]; placeholder = "auto", validator = _valid_limit, width = 72)
     fit = _checkbox(panel[row += 1, 1], false)
     Label(panel[row, 2:3], "fit colours to plane"; halign = :left)
     logscale = _checkbox(panel[row += 1, 1], false)
@@ -351,20 +450,25 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
         end
         notify(step)
         on(p -> play.label[] = p ? "pause" : "play", playing)
-        # steps on while playing, until the window is closed; a CairoMakie figure has no
-        # window, so nothing runs in the tests
+        # steps on while playing, at the speed chosen, until the window is closed; a
+        # CairoMakie figure has no window, so nothing runs in the tests. Each start is a
+        # new run, so that a pause and play within one step does not leave two running.
+        run = Ref(0)
         on(play.clicks) do _
             playing[] = !playing[]
             playing[] || return
+            this = run[] += 1
+            go() = playing[] && run[] == this && events(ls.scene).window_open[]
             @async try
-                while playing[] && events(ls.scene).window_open[]
+                while go()
+                    started = time()                 # the time of the step included
                     _next_step!(time_slider, field[])
-                    sleep(0.1)
+                    _wait_until(() -> started + 1 / speed_menu.selection[], go)
                 end
             catch err
                 @error "playing the time series stopped" exception = (err, catch_backtrace())
             finally
-                playing[] = false
+                run[] == this && (playing[] = false)   # not when a newer run has started
             end
         end
     end
@@ -390,8 +494,30 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
     use_log = Observable(false)
     ranges = Dict{Any,Any}()                         # global ranges, computed once each
     colorrange = Observable((-1.0, 1.0))
-    onany(samples, quantity, mode, angle, fit.checked, logscale.checked,
-          range_exp.value) do fs, q, m, φ, fitted, lg, e
+    auto = Observable((-1.0, 1.0))                   # of the whole field, or of the plane
+    log_on = Ref(false)                              # the log scale, where the values allow it
+    limits = Observable{Any}((nothing, nothing))     # set by the user; nothing: automatic
+    syncing = Ref(false)                             # the controls follow the range, not the user
+    function apply_range!()
+        lg = log_on[]
+        rng = _limited(auto[], limits[], lg)
+        signed[] = rng[1] < 0 < rng[2]               # about zero
+        # a log scale never sees a range from zero: the range goes first when switching
+        # it on, last when switching it off
+        lg ? (colorrange[] = rng; use_log[] = lg) : (use_log[] = lg; colorrange[] = rng)
+        syncing[] = true
+        try
+            pos = _limit_positions(auto[], lg)
+            limit_slider.range[] == pos || (limit_slider.range[] = pos)
+            set_close_to!(limit_slider, rng...)      # a limit beyond the slider: at its end
+            for (box, x) in ((min_box, rng[1]), (max_box, rng[2]))
+                box.focused[] || (box.displayed_string[] = _limit_text(x))
+            end
+        finally
+            syncing[] = false
+        end
+    end
+    onany(samples, quantity, mode, angle, fit.checked, logscale.checked) do fs, q, m, φ, fitted, lg
         fs === nothing && return
         f, smp = fs
         q in _quantities(f) || return                # the quantity menu is being switched
@@ -401,24 +527,35 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
         log_label[] = _log_possible(stats) ? "log scale" : "log scale (n/a)"
         log_ok[] = _log_possible(stats)
         lg = lg && _log_possible(stats)              # not for values with both signs
-        rng = _range_from(stats, _is_magnitude(f, q, m), lg)
-        # the range slider narrows it (the phase keeps its ±180°)
-        f.complex && m == "phase" || (rng = _narrowed(rng, 10.0^e, lg))
-        sg = rng[1] < 0 < rng[2]                     # about zero
-        signed[] = sg
-        # a log scale never sees a range from zero: the range goes first when switching
-        # it on, last when switching it off
-        lg ? (colorrange[] = rng; use_log[] = lg) : (use_log[] = lg; colorrange[] = rng)
+        auto[] = _range_from(stats, _is_magnitude(f, q, m), lg)
+        log_on[] = lg
+        apply_range!()
         values[] = Float32.(vec(lg ? map(x -> x > 0 ? x : NaN, v) : v))
     end
+    # the limits: dragged (a handle at the end of the slider is automatic), typed (empty
+    # is automatic), or both automatic again; and automatic for another field, quantity
+    # or complex mode, whose values differ in kind. Kept while the plane, the time or the
+    # phase changes.
+    on(limits) do _
+        apply_range!()
+    end
+    on(limit_slider.interval) do (a, b)
+        syncing[] && return
+        pos = limit_slider.range[]
+        limits[] = (a <= first(pos) ? nothing : a, b >= last(pos) ? nothing : b)
+    end
+    on(s -> limits[] = (_parse_limit(s), limits[][2]), min_box.stored_string)
+    on(s -> limits[] = (limits[][1], _parse_limit(s)), max_box.stored_string)
+    on(_ -> limits[] = (nothing, nothing), auto_button.clicks)
+    onany((_...) -> limits[] == (nothing, nothing) || (limits[] = (nothing, nothing)), field, quantity, mode)
 
     # arrows of vector fields: in the plane, on a coarser lattice, all the same length or
     # scaled to the magnitude (against the colour range's reference: the whole field,
-    # or the plane with "fit colours to plane", narrowed by the range slider)
+    # or the plane with "fit colours to plane", narrowed as the colour limits narrow it)
     arrow_data = Observable{Any}(([Point3f(NaN)], [Vec3f(NaN)]))
     arrow_size = Observable(1.0f0)
-    onany(samples, mode, angle, fit.checked, range_exp.value, scaled.checked,
-          arrows_on.checked) do fs, m, φ, fitted, e, sc, on
+    onany(samples, mode, angle, fit.checked, colorrange, scaled.checked,
+          arrows_on.checked) do fs, m, φ, fitted, rng, sc, on
         (on && fs !== nothing) || return
         f, smp = fs
         f.vector || return
@@ -433,7 +570,8 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
                                    _display_values(smp, f, "magnitude", am, φ); init = 0.0) :
                   get!(() -> _global_stats(domain, f, "magnitude", am), ranges,
                        (f.name, "magnitude", am))[2]
-            ref = ref * 10.0^e
+            full, shown = maximum(abs, auto[]), maximum(abs, rng)
+            (full > 0 && shown > 0) && (ref *= shown / full)
             ref > 0 || (ref = 1.0)
         end
         arrow_size[] = Float32(0.6h)
@@ -460,8 +598,9 @@ function _add_field!(ls, panel, row, domain, specs, axis, slider; refine = 1)
     return row, (; on = field_on, field, quantity, mode, phase = angle, fit = fit.checked,
                  log = logscale.checked, viridis = viridis.checked, samples, values,
                  colorrange, colormap, signed, plot = plt, field_menu, quantity_menu, mode_menu,
-                 phase_slider = phase, step, time_slider, time_text, play, playing,
-                 range_slider = range_exp, log_label, log_box = logscale, arrows_box = arrows_on,
+                 phase_slider = phase, step, time_slider, time_text, play, playing, speed_menu,
+                 range_slider = limit_slider, min_box, max_box, auto_button, limits, auto,
+                 log_label, log_box = logscale, arrows_box = arrows_on,
                  scaled_box = scaled, arrows = arrows_on.checked, scaled = scaled.checked,
                  arrow_data, arrow_plot)
 end

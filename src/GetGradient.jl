@@ -41,11 +41,3 @@ function get_gradient(config, ::Dual)
     S = get_divergence(config, Primal())
     return -sparse(S')
 end
-
-#function G(config)
-#    return get_gradient(config, Primal())
-#end
-
-#function G̃(config)
-#    return get_gradient(config, Dual())
-#end

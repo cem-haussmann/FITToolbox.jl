@@ -2,6 +2,7 @@
 #10/08/2026
 using FITToolbox, Test, LinearAlgebra, SparseArrays
 using CairoMakie
+using Aqua
 
 # Non-cubic everywhere. A 10×10×10 grid hides exactly the stride bugs you
 # most want to catch, because Nu, Nv and Nw become interchangeable.
@@ -33,6 +34,31 @@ const D = create_domain([6.0, 8.0, 10.0], [2.0, 2.0, 2.0]; units="m")
     @test_throws "domain size must be positive" create_domain([-1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
     @test_throws "domain size must be positive" create_domain([NaN, 1.0, 1.0], [0.1, 0.1, 0.1])
     @test_throws "resolution must be positive" create_domain([1.0, 1.0, 1.0], [0.1, 0.0, 0.1])
+    # not even one cell: less than half a resolution
+    @test_throws "domain size 0.1 is smaller than resolution 0.5" create_domain([0.1, 1.0, 1.0], [0.5, 0.1, 0.1])
+    # a resolution that does not divide the size: the nearest number of cells, with a
+    # warning, and the domain that much smaller (3 cells of 0.3 m for 1 m)
+    R3 = @test_logs (:warn, r"Resolution does not divide") create_domain([1.0, 1.0, 1.0], [0.3, 0.1, 0.1])
+    @test R3.Nu == 4 && R3.nodes_u[end] ≈ 0.9 && R3.Nv == 11
+end
+
+@testset "the FITDomain constructor checks the sizes" begin
+    # the arrays come from create_domain; given directly, each must fit the nodes, or an
+    # ArgumentError names it, instead of a domain whose stencils read past the arrays
+    names = fieldnames(FITDomain)[1:18]
+    good = Any[getfield(D, n) for n in names]
+    push!(good, D.σ, D.ε_r, D.μ_r, D.material)
+    @test FITDomain(good...).material == D.material
+    shorter(a::AbstractVector) = a[1:end-1]
+    shorter(a::AbstractMatrix) = a[1:end-1, :]
+    for (k, n) in enumerate(names)
+        bad = copy(good); bad[k] = shorter(good[k])
+        # the nodes define Nu, Nv, Nw: one node fewer makes the edges of that axis too many
+        expected = k <= 3 ? "$((:edges_u, :edges_v, :edges_w)[k]) must have length" : "$n must"
+        @test_throws expected FITDomain(bad...)
+    end
+    bad = copy(good); bad[end] = D.material[:, :, 1:end-1, :]
+    @test_throws "material must be ((Nu-1)×(Nv-1)×(Nw-1)×3), got (3, 4, 4, 3)" FITDomain(bad...)
 end
 
 @testset "operator identities" begin
@@ -65,6 +91,9 @@ end
         R = get_boundary_matrix(D, faces, component)
         @test size(R) == (3Np, 3Np) && isdiag(R)
         @test findall(iszero, diag(R)) == sort(expected) && all(isone, diag(R)[setdiff(1:3Np, expected)])
+        # the faces as a tuple, as a vector
+        @test get_boundary_matrix(D, Tuple(faces), component) == R
+        @test get_custom_boundary_indices(D, Tuple(faces), component) == sort(expected)
     end
     @test size(get_boundary_matrix(D, faces, NodalComponent())) == (Np, Np)
     # one face, u = nodes_u[end]: its v- and w-entries are tangential, its u-edges the dead ones
@@ -154,6 +183,72 @@ end
     U = create_domain([4.0, 4.0, 4.0], [2.0, 2.0, 2.0])
     c = 1/sqrt(8.8541878188e-12 * 4π*1e-7)
     @test get_vacuum_cfl_time(U) ≈ 2.0/(c*sqrt(3)) rtol=1e-12
+end
+
+@testset "CFL: below the leapfrog stability limit" begin
+    # Leapfrog is stable for Δt ≤ 2/ω_max, with ω_max² the largest eigenvalue of
+    # M_ε^{-1/2} Cᵀ M_ν C M_ε^{-1/2} on the real edges. The vacuum CFL step must lie below
+    # it on any grid. On an equidistant grid it is the limit itself: the highest mode, a
+    # checkerboard, fits the box exactly with the half dual cells at the walls.
+    function stability_limit(g)
+        real = setdiff(1:3g.Np, get_ghost_indices(g))
+        s = Diagonal(1 ./ sqrt.(diag(get_permittivity(g))[real]))
+        C = get_curl(g, Primal())[:, real]
+        return 2 / sqrt(eigmax(Symmetric(Matrix(s * (C' * get_reluctivity(g) * C) * s))))
+    end
+    U = create_domain([0.6, 0.7, 0.8], [0.1, 0.1, 0.1])
+    G = create_domain([0.05, 0.1, 0.2, 0.1], [0.3, 0.1, 0.1, 0.3], [0.1, 0.02, 0.1])
+    lu, lg = stability_limit(U), stability_limit(G)
+    @test get_vacuum_cfl_time(U) ≈ lu rtol = 1e-8
+    @test get_vacuum_cfl_time(U) <= lu * (1 + 1e-12)
+    @test get_vacuum_cfl_time(G) <= lg                        # about half of it here
+end
+
+@testset "curl orientation: Stokes on the primal and the dual grid" begin
+    # C G = 0 and S C = 0 hold for -C as well; only the field of a known potential fixes
+    # the sign. A uniform B along +w from â of A = B0 (-v/2, u/2, 0): C â is B0 times the
+    # area of every w-facet and zero on the others, exactly, as A is linear. The same for
+    # a uniform current density J0 along +w from H = J0 (-v/2, u/2, 0) on the dual edges:
+    # C̃ ĥ is J0 times the area of the dual facets around the interior w-edges.
+    g = create_domain([0.3, 0.1, 0.2], [0.2, 0.5, 0.1, 0.4], [0.25, 0.25, 0.5])   # graded
+    Nu, Nv, Nw, Np = g.Nu, g.Nv, g.Nw, g.Np
+    p(i, j, k) = i + (j-1)*Nu + (k-1)*Nu*Nv
+    B0, J0 = 2.0, 3.0
+    a, h = zeros(3Np), zeros(3Np)
+    for k in 1:Nw, j in 1:Nv, i in 1:Nu
+        i < Nu && (a[p(i, j, k)]      = -B0/2 * g.nodes_v[j] * g.edges_u[i])
+        j < Nv && (a[p(i, j, k) + Np] =  B0/2 * g.nodes_u[i] * g.edges_v[j])
+        # a dual edge lies at the cell centres across it
+        j < Nv && k < Nw && (h[p(i, j, k)]      = -J0/2 * g.edges_v_center[j] * g.dual_edges_u[i])
+        i < Nu && k < Nw && (h[p(i, j, k) + Np] =  J0/2 * g.edges_u_center[i] * g.dual_edges_v[j])
+    end
+    b = get_curl(g, Primal()) * a
+    w_facets = [(i, j, k) for k in 1:Nw, j in 1:Nv-1, i in 1:Nu-1]
+    @test [b[p(t...) + 2Np] for t in w_facets] ≈ [B0 * g.primal_facets_w[i, j] for (i, j, _) in w_facets]
+    # no flux through the real u- and v-facets (those on the last node plane are dead)
+    @test iszero([b[p(i, j, k)]      for k in 1:Nw-1, j in 1:Nv-1, i in 1:Nu])
+    @test iszero([b[p(i, j, k) + Np] for k in 1:Nw-1, j in 1:Nv, i in 1:Nu-1])
+    c = get_curl(g, Dual()) * h
+    inner = [(i, j, k) for k in 1:Nw-1, j in 2:Nv-1, i in 2:Nu-1]
+    @test [c[p(t...) + 2Np] for t in inner] ≈ [J0 * g.dual_facets_w[i, j] for (i, j, _) in inner]
+end
+
+@testset "a domain displays as a summary" begin
+    # not every field: the default show of a struct prints all arrays
+    d = create_domain([1.0, 0.8, 0.6], [0.1, 0.1, 0.1]; ε_r = 2)
+    @test sprint(show, MIME"text/plain"(), d) == """
+        FITDomain: 10×8×6 cells (480), 693 nodes, equidistant
+          extent:     1.0 × 0.8 × 0.6 m
+          resolution: 0.1 × 0.1 × 0.1 m
+          background: σ = 0.0, ε_r = 2.0, μ_r = 1.0
+          objects:    0 objects"""
+    create_sphere!(d, 0.5, 0.4, 0.3, 0.2; name = "ball")
+    @test endswith(sprint(show, MIME"text/plain"(), d), "objects:    1 object (see list_objects)")
+    @test sprint(show, d) == "FITDomain(10×8×6 cells, 1 object)"
+    @test endswith(repr([d]), "[FITDomain(10×8×6 cells, 1 object)]")   # inside a container
+    g = create_domain([0.1, 0.2], [0.1], [0.1, 0.1, 0.1])
+    s = sprint(show, MIME"text/plain"(), g)
+    @test startswith(s, "FITDomain: 2×1×3 cells (6), 24 nodes, graded") && !occursin("resolution", s)
 end
 
 @testset "exports resolve" begin
@@ -265,6 +360,10 @@ include("viewer.jl")
         @test all(hm.colorrange[] .≈ range)
         @test any(p -> p isa StreamPlot, ax.scene.plots)
     end
+end
+
+@testset "Aqua: method ambiguities, piracy, stale dependencies, compat entries" begin
+    Aqua.test_all(FITToolbox)
 end
 
 end

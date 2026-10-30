@@ -27,8 +27,8 @@ _describe_material(w::PolylineSource) = "I=$(_short(w.current)) A"
 
 Add a wire carrying `current` (in A) along a polyline to `domain` and return its
 `obj_id`; its discrete current vector comes from `get_source(domain, obj_id)` or
-`get_source(domain, name)`, length `3Np` in the edge layout. `points` is a vector of
-points `(u, v, w)` in `units`; the wire runs straight from each to the next, and with
+`get_source(domain, name)`, length `3Np` in the edge layout. `points` is a vector (or a
+tuple) of points `(u, v, w)` in `units`; the wire runs straight from each to the next, and with
 `closed = true` from the last back to the first. A straight wire is two points.
 
 On the grid, each point snaps to its nearest node, and each straight piece becomes a
@@ -53,8 +53,8 @@ open polyline therefore prints an info message naming the two end nodes.
 
 Throws an `ArgumentError` for fewer than two points (three if `closed`), for a point
 outside the domain, if all points snap to the same node, if the polyline cancels itself
-(every edge walked as often back as forth, e.g. there and back along one line), or if
-`name` is already used. Nothing is recorded then.
+(every edge walked as often back as forth, e.g. there and back along one line), if
+`current` is not finite, or if `name` is already used. Nothing is recorded then.
 
 # Example
 
@@ -67,7 +67,8 @@ create_polyline_source!(domain, [(0.2, 0.2, 0.3), (0.8, 0.2, 0.3), (0.5, 0.7, 0.
                         closed = true, name = "triangle")
 ```
 """
-function create_polyline_source!(domain::FITDomain, points::AbstractVector; closed::Bool=false,
+function create_polyline_source!(domain::FITDomain, points::Union{AbstractVector,Tuple};
+                                 closed::Bool=false,
                                  units="m", current=1.0, name::AbstractString="")
     unitToMeter = check_units(units)
     all(p -> length(p) == 3, points) ||

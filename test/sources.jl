@@ -69,6 +69,7 @@ end
 end
 
 @testset "invalid requests" begin
+    n = length(list_objects(d))
     # does not fit
     @test_throws ArgumentError create_circular_loop_source!(d, 19.5, cv, cw, R, DirX())   # plane beyond nodes_u[end-2]
     @test_throws ArgumentError create_circular_loop_source!(d, cu, 25.0, cw, R, DirX())   # v + R beyond the domain
@@ -76,6 +77,20 @@ end
     @test_throws "u-direction" create_circular_loop_source!(d, cu, cv, cw, R, DirY())     # u + R = 18.3 > 18
     @test_throws "w-direction" create_circular_loop_source!(d, cu, cv, 29.5, 5.0, DirZ()) # plane beyond nodes_w[end-2]
     @test_throws "radius must be positive" create_circular_loop_source!(d, cu, cv, cw, -1.0, DirX())
+    @test_throws "positive and finite" create_circular_loop_source!(d, cu, cv, cw, Inf, DirX())
+    @test_throws "current must be finite" create_circular_loop_source!(d, cu, cv, cw, R, DirX(); current = NaN)
+    @test_throws "current must be finite" create_circular_loop_source!(d, cu, cv, cw, R, DirX();
+                                                                       current = complex(1.0, Inf))
+
+    # a plane inside the domain, but beyond nodes[end-2]: the message gives the range
+    # and the value, instead of calling it outside the domain
+    @test_throws "u-direction: it must lie within u = 0.0 … 18.0 m (nodes[1] … nodes[end-2]), got u = 19.0 m" create_circular_loop_source!(d, 19.0, cv, cw, R, DirX())
+    @test_throws "it must lie within v = 0.0 … 29.0 m (nodes[1] … nodes[end-2]), got 17.0 … 33.0 m" create_circular_loop_source!(d, cu, 25.0, cw, R, DirX())
+    @test_throws "the loop plane does not fit in the domain in w-direction: it must lie within w = 0.0 … 29.0 m" create_rectangular_loop_source!(d, 1, 1, 29.5, 2, 2, DirZ())
+    @test_throws "loop does not fit in the domain in u-direction: it must lie within u = 0.0 … 18.0 m" create_rectangular_loop_source!(d, 17, 1, 10, 2, 2, DirZ())
+    @test_throws "positive and finite" create_rectangular_loop_source!(d, 1, 1, 10, Inf, 2, DirZ())
+    @test_throws "charge must be finite" create_electric_charge!(d, 1, 1, 1; charge = -Inf)
+    @test length(list_objects(d)) == n                    # none of these was recorded
 
     # smaller than a cell: nothing to mark, with a warning
     id0 = @test_logs (:warn, r"No edges") create_circular_loop_source!(d, 10.0, 15.0, 15.0, 0.1, DirX())
@@ -310,6 +325,10 @@ end
     @test count(!iszero, J) == 7 && all(==(1.0), J[findall(!iszero, J)])
     @test all(p -> p <= g.Np, findall(!iszero, J))                      # u-edges only
     @test wire([(0.8, 0.5, 0.5), (0.1, 0.5, 0.5)]) == -J
+    # the points as a tuple, as a vector
+    @test wire(((0.8, 0.5, 0.5), (0.1, 0.5, 0.5))) == -J
+    @test_throws "current must be finite" quiet(() -> create_polyline_source!(g, [(0.1, 0.5, 0.5),
+                                                       (0.8, 0.5, 0.5)]; current = Inf))
 
     # a diagonal through all three axes: connected, one edge per step, near the line
     a, b = (0.1, 0.2, 0.3), (0.8, 0.6, 0.9)
