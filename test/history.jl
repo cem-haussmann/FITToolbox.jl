@@ -67,15 +67,16 @@ end
     d = _hist_domain()
     create_brick!(d, 0, 0, 0, 2, 2, 2)
 
-    @test_throws ArgumentError create_brick!(d, 100, 0, 0, 2, 2, 2)    # corner outside the domain
+    @test_throws ArgumentError create_brick!(d, 100, 0, 0, 2, 2, 2)    # outside the domain altogether
     @test_throws ArgumentError create_brick!(d, 0, 0, 0, -2, 2, 2)     # negative length
-    @test_throws ArgumentError create_brick!(d, 0, 0, 0, 0.5, 2, 2)    # thinner than one cell
     @test_throws ArgumentError create_sphere!(d, 3, 4, 5, 0.0)         # zero radius
-    @test_throws ArgumentError create_sphere!(d, 30, 4, 5, 1.0)        # centre outside
+    @test_throws ArgumentError create_sphere!(d, 30, 4, 5, 1.0)        # outside the domain altogether
 
     @test length(d._history.steps) == 1
     @test d._history.obj_counter   == 1
     @test create_brick!(d, 2, 2, 2, 2, 2, 2) == 2    # no ids were used up by the failures
+    # thinner than a cell is not a failure: recorded, with a warning, as for a sphere
+    @test (@test_logs (:warn, r"no cells were filled") create_brick!(d, 0, 0, 0, 0.5, 2, 2)) == 3
 end
 
 @testset "history: delete" begin
@@ -434,11 +435,14 @@ end
     @test fine2.material == fine_material
     @test coarse.material[1, 1, 1, 2] == 42.0                          # original untouched
 
-    # an object that no longer fits the grid: error, original unchanged
+    # a solid thinner than half a cell of the new grid: kept, with the warning that it
+    # fills no cell, as when created there (a source that no longer fits is an error,
+    # see "change_resolution checks the sources"); the original unchanged
     t = create_domain([6.0, 8.0, 10.0], [0.5, 0.5, 0.5])
-    create_brick!(t, 0, 0, 0, 0.5, 4, 4)
-    @test_throws ArgumentError change_resolution(t, 2.0)
-    @test length(t._history.steps) == 1
+    create_brick!(t, 0, 0, 0, 0.5, 4, 4; ε_r = 3.0)
+    t2 = @test_logs (:warn, r"no cells were filled") change_resolution(t, 2.0)
+    @test length(list_objects(t2)) == 1 && !any(==(3.0), t2.material[:, :, :, 2])
+    @test length(t._history.steps) == 1 && count(==(3.0), t.material[:, :, :, 2]) == 1 * 8 * 8
     @test_throws ArgumentError change_resolution(t, (1.0, 1.0))
 end
 
@@ -555,6 +559,28 @@ end
     quiet(() -> create_polyline_source!(p, [(0.45, 0.45, 0.5), (0.55, 0.45, 0.5), (0.55, 0.55, 0.5)];
                                         closed = true, name = "tiny"))
     @test_throws "source \"tiny\" (obj_id 1) does not fit this grid: the polyline collapses" change_resolution(p, 0.25)
+end
+
+@testset "history: change_resolution with solids that reach in only a little" begin
+    # The extent stays, so no object moves outside the domain; but one that reaches
+    # 3 cm in fills a cell of 5 cm and none of 10 cm. As when created on that grid, a
+    # brick and a sphere alike stay in the history with the warning that they fill no
+    # cell, and come back on a finer grid.
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    @test_logs (:warn, r"clipped") create_brick!(d, -0.5, 0.0, 0.0, 0.53, 0.5, 0.5; ε_r = 2.0, name = "slab")
+    @test count(==(2.0), d.material[:, :, :, 2]) == 1 * 10 * 10
+    coarse = @test_logs (:warn, r"clipped") (:warn, r"no cells were filled") change_resolution(d, 0.1)
+    @test only(list_objects(coarse)).name == "slab" && !any(==(2.0), coarse.material[:, :, :, 2])
+    back = @test_logs (:warn, r"clipped") change_resolution(coarse, 0.05)
+    @test back.material == d.material
+
+    s = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    @test_logs (:warn, r"clipped") create_sphere!(s, -0.27, 0.5, 0.5, 0.3; ε_r = 2.0, name = "cap")
+    @test count(==(2.0), s.material[:, :, :, 2]) > 0
+    coarse = @test_logs (:warn, r"clipped") (:warn, r"no cells were filled") change_resolution(s, 0.1)
+    @test only(list_objects(coarse)).name == "cap" && !any(==(2.0), coarse.material[:, :, :, 2])
+    back = @test_logs (:warn, r"clipped") change_resolution(coarse, 0.05)
+    @test back.material == s.material
 end
 
 @testset "history: complex current" begin

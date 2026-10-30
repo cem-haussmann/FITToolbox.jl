@@ -209,6 +209,23 @@ end
     @test eltype(Mc) == ComplexF64
     @test real(diag(Mc)) ≈ diag(get_permittivity(g))
     @test imag(diag(Mc)) ≈ 0.5 .* diag(get_permittivity(g))
+    @test Mc isa Diagonal{ComplexF64, Vector{ComplexF64}}
+end
+
+@testset "storage: Diagonal, and sparse products with the operators" begin
+    Mσ, Mε, Mν = get_conductivity(g), get_permittivity(g), get_reluctivity(g)
+    # only the 3Np entries are stored, as a plain vector
+    @test all(M -> M isa Diagonal{Float64, Vector{Float64}} && size(M) == (3Np, 3Np), (Mσ, Mε, Mν))
+    C, G = get_curl(g, Primal()), get_gradient(g, Primal())
+    # the operators the examples build stay sparse, and equal those from a sparse M
+    @test G' * Mε * G isa SparseMatrixCSC
+    @test G' * Mε * G == G' * sparse(Mε) * G
+    @test C' * Mν * C isa SparseMatrixCSC
+    @test C' * Mν * C == C' * sparse(Mν) * C
+    A = C' * Mν * C + im * 2π * 50 * Mσ
+    @test A isa SparseMatrixCSC{ComplexF64}
+    @test A == C' * sparse(Mν) * C + im * 2π * 50 * sparse(Mσ)
+    @test Mε * ones(3Np) isa Vector{Float64}
 end
 
 # ---------------------------------------------------------------------------

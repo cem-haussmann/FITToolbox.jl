@@ -50,12 +50,12 @@ snapped rectangle. `current` may be complex; the source vector is then `ComplexF
 
 # Errors
 
-Throws an `ArgumentError` if a side length is not positive, if a side becomes zero on
+Throws an `ArgumentError` if a side length is not positive and finite, if a side becomes zero on
 the grid (shorter than about half a cell), if the plane lies outside
 `nodes[1] … nodes[end-2]` along the normal, if the rectangle does not fit within
 `nodes[1] … nodes[end-2]` in the plane (the same gap to the boundary as for
 `create_circular_loop_source!`), if the grid has fewer than three nodes in a direction,
-or if `name` is already used. Nothing is recorded then.
+if `current` is not finite, or if `name` is already used. Nothing is recorded then.
 
 # Example
 
@@ -93,16 +93,20 @@ function _unit_edges(config::FITDomain, r::RectangularLoop)
     a = _axis_index(r.normal)
     p, q = _inplane_axes(r.normal)
 
-    all(>(0), r.lengths) ||
-        throw(ArgumentError("side lengths must be positive, got $(r.lengths) m"))
+    all(_positive_length, r.lengths) ||
+        throw(ArgumentError("side lengths must be positive and finite, got $(r.lengths) m"))
     # The same gap to the boundary as for the circular loop: nodes[1] … nodes[end-2]
     _check_loop_grid(config)
     inner(d, x) = _within(x, nodes[d], nodes[d][1], nodes[d][end-2])
     inner(a, r.origin[a]) ||
-        throw(ArgumentError("loop plane lies outside the domain in $(names[a])-direction"))
+        throw(ArgumentError("the loop plane does not fit in the domain in $(names[a])-direction: \
+                             it must lie within $(_loop_range(nodes, names, a)), got \
+                             $(names[a]) = $(_short(r.origin[a])) m"))
     for (d, L) in ((p, r.lengths[1]), (q, r.lengths[2]))
         inner(d, r.origin[d]) && inner(d, r.origin[d] + L) ||
-            throw(ArgumentError("loop does not fit in the domain in $(names[d])-direction"))
+            throw(ArgumentError("loop does not fit in the domain in $(names[d])-direction: \
+                                 it must lie within $(_loop_range(nodes, names, d)), got \
+                                 $(_short(r.origin[d])) … $(_short(r.origin[d] + L)) m"))
     end
 
     # the plane and the sides on the nearest nodes

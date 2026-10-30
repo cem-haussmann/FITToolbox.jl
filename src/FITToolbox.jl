@@ -4,7 +4,6 @@
 # Date: 21/03/2026
 
 module FITToolbox
-#__precompile__(false)
 using LinearAlgebra
 using SparseArrays
 using Base.Threads
@@ -113,7 +112,21 @@ include("SaveLoad.jl")
 """
     plot_nodal_values(config, ::Primal, data, normal::Direction; kwargs...)
 
-Plot nodal values on a cut plane through `config` with the given `normal`.
+Plot nodal values on a cut plane through `config` with the given `normal`, as a heatmap
+with a colour bar; returns the `Figure`. `data` has one value per primal node (length
+`Np`), e.g. a potential `Φ`.
+
+Keywords:
+- `pos = 0`, `units = "m"`: the position of the plane along `normal`;
+- `label = "Potential Φ [V]"`: the label of the colour bar;
+- `clip_range = nothing`: a fixed colour range `(lo, hi)`, else that of the plane;
+- `logscale = false`: a log colour scale; zero and negative values are left out, and it
+  throws if the plane has no positive value;
+- `plot_negative_gradient = false`: field lines of `-G Φ` on top, the electric field of
+  a potential, with the `streamplot` settings `density = 1.2`, `stepsize = 0.5`,
+  `maxsteps = 1000` and `gridsize = (32, 32)`.
+
+Throws a `DimensionMismatch` if `data` does not have length `Np`.
 
 Requires a Makie backend. Run `using CairoMakie` (or GLMakie / WGLMakie)
 before calling; the implementation lives in a package extension.
@@ -170,8 +183,11 @@ part, magnitude or phase. The colours span the whole field by default, so that p
 can be compared, or only the plane ("fit colours to plane"): symmetric about zero for
 values of both signs (and for the instantaneous value of complex data), from zero for
 magnitudes, and from the smallest to the largest value otherwise, e.g. 0 … 1 V for a
-potential between plates at 0 V and 1 V. A slider narrows the range down to a
-thousandth, keeping its end nearest to zero, to bring out weak parts of the field. The
+potential between plates at 0 V and 1 V. Its limits can be set: with the two handles of
+a slider over that range, in decades on a log scale, or typed into "min" and "max",
+also beyond it, e.g. to bring out weak parts of the field or to compare planes at the
+same scale. An end left empty, or at the end of the slider, follows the field; "auto"
+resets both, as does choosing another field or quantity. The
 colour map is `jet`, or `viridis`; values without negative ones, such as magnitudes or
 that potential, can be shown on a log scale. The name labels the
 colour bar, so it can carry the unit, e.g. `"B (T)"`. Vector fields can also be shown as
@@ -181,8 +197,12 @@ slider.
 
 A field that changes over time, e.g. from FDTD, is given as
 `"name" => (snapshots, entity, times)`: `snapshots` is a vector of data vectors, or a
-matrix with one per column, recorded at `times` (in s). A slider steps through them and
-"play" runs through them; the colour bar label shows the time. Switching to another
+matrix with one per column, recorded at `times` (in s). It can also be any other
+`AbstractVector` of data vectors, e.g. one that reads each snapshot from a file when it
+is indexed: then only the snapshot shown is held in memory, and the colour range reads
+each snapshot once, the first time the field is shown. A slider steps through them and
+"play" runs through them, at a speed chosen from 0.5 to 10 snapshots per second
+(2 by default); the colour bar label shows the time. Switching to another
 time series keeps the time, at its nearest snapshot, so fields recorded half a step
 apart (`ê` and `ĥ`) can be compared. The colours span all snapshots by default.
 
@@ -235,7 +255,6 @@ export save_domain, load_domain
 export get_conductivity
 export get_permittivity
 export get_reluctivity
-#export M_ν,M_ε,M_σ
 
 # Field reconstruction
 export interpolate

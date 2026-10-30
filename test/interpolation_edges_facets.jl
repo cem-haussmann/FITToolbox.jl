@@ -22,6 +22,10 @@ _ip_node(d, i, j, k) = i + (j-1)*d.Nu + (k-1)*d.Nu*d.Nv
 const _IP_LINEAR = ((x, y, z) -> 2x + 3y - z + 1,
                     (x, y, z) -> -x + y + 4z,
                     (x, y, z) -> 5x - 2y + z)
+# and others for the imaginary part of a complex field
+const _IP_LINEAR_IM = ((x, y, z) -> x - y + 2,
+                       (x, y, z) -> 3z - x,
+                       (x, y, z) -> y + z - 4)
 
 # For each component: where the entities sit, and what their value is integrated over.
 _ip_layout(d, ::PrimalEdge) = (
@@ -71,6 +75,25 @@ entities = (PrimalEdge(), DualFacet(), DualEdge(), PrimalFacet())
     # units rescale the query position only
     @test collect(interpolate(d, entity, v, 2900.0, 2600.0, 2200.0; units = "mm")) ≈
           collect(interpolate(d, entity, v, 2.9, 2.6, 2.2)) rtol = 1e-12
+end
+
+# phasors of the frequency domain: the interpolation is linear, so a complex field gives
+# the interpolated real part plus j times the interpolated imaginary part (_IP_LINEAR_IM)
+@testset "complex data: $(nameof(typeof(entity)))" for entity in entities
+    v = complex.(_ip_integrated_field(d, entity), _ip_integrated_field(d, entity, _IP_LINEAR_IM))
+    for (x, y, z) in ((0.7, 1.3, 0.4), (4.9, 3.7, 4.8))
+        r = collect(interpolate(d, entity, v, x, y, z))
+        @test eltype(r) == ComplexF64
+        @test r ≈ [complex(f(x, y, z), g(x, y, z)) for (f, g) in zip(_IP_LINEAR, _IP_LINEAR_IM)] atol = 1e-12
+    end
+end
+
+@testset "complex data on nodes" begin
+    Φ = [complex(2x + 3y - z, x - 4z) for z in d.nodes_w for y in d.nodes_v for x in d.nodes_u]
+    r = interpolate(d, PrimalNode(), Φ, 2.9, 2.6, 2.2)
+    @test r isa ComplexF64
+    @test r ≈ complex(2*2.9 + 3*2.6 - 2.2, 2.9 - 4*2.2) atol = 1e-12
+    @test isnan(@test_logs (:warn, r"outside") interpolate(d, PrimalNode(), Φ, -1.0, 2.6, 2.2))
 end
 
 @testset "the outermost half cells: $(nameof(typeof(entity)))" for entity in entities

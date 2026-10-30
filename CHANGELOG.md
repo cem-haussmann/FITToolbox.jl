@@ -28,15 +28,50 @@ interactive 3D view of a model, as modelled and as the grid sees it.
   other create functions, the centre first and then the radius:
   `create_circular_loop_source!(domain, u, v, w, radius, normal)`. The old name still
   returns the vector and takes the radius first, as before, but is deprecated.
+- **Breaking:** `get_permittivity`, `get_conductivity` and `get_reluctivity` return a
+  `Diagonal` instead of a `SparseMatrixCSC`. It stores only the `3Np` entries, a third
+  of the memory, and products with the operators, such as `G' * M_ε * G` and
+  `C' * M_ν * C + im * ω * M_σ`, are the same sparse matrices as before and as fast or
+  faster. `diag(M)`, `M * x` and `M[p, p]` work as before. Code that indexes a material
+  matrix with index vectors, `M[idx, idx]`, now gets a dense matrix: use
+  `Diagonal(diag(M)[idx])`, or `sparse(M)` where a `SparseMatrixCSC` is needed.
 - Deprecation warnings appear only when Julia runs with `--depwarn=yes`, as in
   `Pkg.test`; by default the old names work silently. This now holds for every old
   name: the one-argument `get_curl(config)` and `get_gradient(config)` are deprecated in
   favour of `get_curl(config, Primal())` and `get_gradient(config, Primal())` instead
   of warning on every call.
-- `create_brick!` clips a brick that reaches beyond the domain, with a warning, as
-  `create_sphere!` and the other solids do, instead of throwing. It still throws if its
-  corner lies outside the domain, if a length is not positive, or if less than about
-  half a cell of it lies in the domain along an axis.
+- `create_brick!` clips a brick that reaches beyond the domain on any side, with a
+  warning, as `create_sphere!` and the other solids do, instead of throwing; its corner
+  may lie outside, e.g. for a plate through the whole domain. It still throws if a length
+  is not positive and finite.
+- A brick that fills no cell, because less than about half a cell of it lies in the
+  domain along an axis (e.g. a foil thinner than half a cell), is recorded with the
+  warning "no cells were filled", as a sphere, cylinder, torus or helix thinner than a
+  cell is, instead of throwing. It fills its cells on a finer grid, so `change_resolution`
+  to a coarser grid and back no longer fails on it.
+- The centre of a sphere or torus and the base of a cylinder or helix may lie outside the
+  domain, as the corner of a brick may, e.g. for a sphere centred just beyond a wall: the
+  solid is clipped to the part that reaches in, with a warning. It used to be an error
+  even when most of the solid lay inside, while a sphere centred on the wall was fine.
+  Every solid that misses the domain altogether throws "the sphere lies outside the
+  domain: it spans u = 4.7 … 5.3 m, the domain u = 0.0 … 1.0 m", also a brick, which
+  used to report a zero extent after snapping instead.
+- A solid that does not fit the grid when `change_resolution` or `load_domain` replays the
+  history names itself, as the sources do: "object "ball" (obj_id 2) does not fit this
+  grid: the sphere lies outside the domain: …", and `load_domain` puts the file in
+  front. It used to say only "the sphere lies outside the domain", whichever sphere it was.
+- **Breaking:** materials are checked: the solids and the background of `create_domain`
+  throw an `ArgumentError` for a conductivity `σ` that is negative and for `ε_r` or `μ_r`
+  that are not positive, and for any of them that is not finite. A zero `μ_r` used to
+  surface only in `get_reluctivity`, a negative `σ` or `ε_r` never, but as a solver that
+  failed or a lossy medium gaining energy. `load_domain` checks a file the same way.
+- Lengths of solids and loops must be finite as well as positive, and currents and
+  charges finite: an infinite radius used to fill or clip against the whole domain
+  without an error. `load_domain` rejects `inf` and `nan` in a file, naming the place.
+- The errors of a loop that does not fit name the range it must lie within and the
+  value that was given, e.g. "the coil plane does not fit in the domain in u-direction:
+  it must lie within u = 0.0 … 0.8 m (nodes[1] … nodes[end-2]), got u = 0.9 m", instead
+  of calling a plane in the last two node planes outside the domain.
 - **Breaking:** a face of a brick exactly halfway between two nodes snaps to the lower
   node, as the corners of the loop sources and the points of polylines and charges do.
   It used to snap to the upper one, so a rectangular loop around a brick given by the
@@ -232,8 +267,71 @@ interactive 3D view of a model, as modelled and as the grid sees it.
     panel.
   - `test/material_matrices.jl`: the aliases `M_σ`, `M_ε` and `M_ν`.
 
+- A `FITDomain` displays as a summary of its grid, background and number of objects,
+  e.g. `FITDomain: 10×8×6 cells (480), 693 nodes, equidistant`, and as
+  `FITDomain(10×8×6 cells, 1 object)` inside a vector. The default display printed every
+  field, thousands of characters on one line in the REPL.
+- `get_boundary_matrix` and `get_custom_boundary_indices` take the faces as a tuple as
+  well as a vector, and `create_polyline_source!` its points.
+- Tests:
+  - the orientation of `C` and `C̃`: Stokes' theorem for a uniform `B` from its vector
+    potential and a uniform current from its `H`, exactly, on a graded grid. The
+    identities `C G = 0` and `S C = 0` hold for `-C` too;
+  - `get_vacuum_cfl_time` against the leapfrog stability limit, from the largest
+    eigenvalue of the system: equal to it on an equidistant grid, below it on a graded
+    one;
+  - the material, length, current and charge checks, the brick clipped below the
+    domain, the loop errors, the display of a domain, tuples of faces and points;
+  - `interpolate` on complex data, for nodes and for every edge and facet entity;
+  - `create_domain` for a size smaller than half a cell and for a resolution that does
+    not divide the size, and the size checks of the `FITDomain` constructor. Every error
+    and warning of the package is now reached by a test, except the three checks that
+    report a bug in the package itself;
+  - Aqua.jl: method ambiguities, type piracy, unbound type parameters, stale
+    dependencies and compat entries. `[compat]` now covers the test dependencies.
+  - `test/manual_glmakie.jl`, run by hand on a machine with a display, not by CI: the
+    views of `view_domain` drawn by GLMakie in hidden windows, a click picking the
+    object under the mouse, "play" and its speed, the colour limits, and the time per frame with
+    1000 objects; a PNG of each view for a look by eye.
+
+- `view_domain` on large models (measured on 8 M cells, and with 1000 objects):
+  - With more than 15 objects, objects of one colour are drawn as one plot per view
+    instead of one plot each: 13 plots instead of 3004 for 1000 objects, and the
+    figure is built in 1.3 s instead of 16 s. Drawing in GLMakie is 25 times faster: a
+    frame of 1000 spheres took 220 ms as 3000 plots and takes 9 ms merged. Each object
+    is still shown, hidden and named by a click on its own; a hidden one's points are
+    NaN in the merged plot, which is not drawn.
+  - The voxel view finds the faces of the objects once; moving the cut keeps those
+    before it and closes the cut, instead of scanning the whole grid on every step of
+    the slider (0.03 s instead of 0.08 s per step, growing with the surface of the
+    objects, not with the number of cells).
+  - The voxel labels are written directly into an array of the smallest integer type,
+    one byte per cell up to 255 objects, instead of replaying the model into a copy of
+    the domain: 8 MiB instead of 216 MiB.
+  - The colour range of a field covers every grid node of every snapshot. It took every
+    s-th node above a million in all, and missed a peak narrower than that, e.g. at a
+    source edge, which then saturated the colours.
+  - A time series given as a vector that reads its snapshots on demand, e.g. from a
+    file, is read on demand: opening the view reads the first snapshot, showing a step
+    reads that one. Every snapshot used to be read at once (40 snapshots of 24 MiB:
+    984 MiB to open the view, now 64 MiB).
+- The limits of the colour range in `view_domain` can be set: with the two handles of a
+  slider over the automatic range, in decades on a log scale, or typed into "min" and
+  "max", also beyond that range. An end left empty, or at the end of the slider,
+  follows the field; "auto" resets both, as does another field, quantity or complex
+  mode. The slider that narrowed the range by a factor towards zero is gone; scaled
+  arrows follow the upper limit as they followed it.
+- "play" in `view_domain` runs at a speed chosen under it, 0.5 to 10 snapshots per
+  second, 2 by default, also changed while it plays. It ran at up to 10, too fast for a
+  series of a few snapshots.
+  Pressing pause and then play within one step no longer stops the new run.
+
 ### Fixed
 
+- The voxel view of `view_domain` kept its cell labels as `Int` although they are made as
+  `Int32` to halve their memory; they stay `Int32` now.
+- A test of the combined view printed the warning of a sphere smaller than a cell; it
+  checks the warning now.
 - A circular loop on a grid too coarse to resolve it on one side, where its crossing
   edges fall on the line through its centre, was not closed: the direction of an edge
   was taken from its position relative to the centre, which is ambiguous there. It now
@@ -276,6 +374,13 @@ interactive 3D view of a model, as modelled and as the grid sees it.
   them; they now show up in the help.
 
 ### Documentation
+
+- `plot_nodal_values` documents its keywords. The docstrings no longer contain
+  Documenter `[…](@ref)` links, which showed up literally in the help.
+- The notebooks with PEC walls build the projection with `get_boundary_matrix` instead of
+  a copy of it of their own.
+- The round solids (sphere, cylinder, torus, helix) share one routine that fills the
+  cells, instead of four copies of it; the cells filled are the same.
 
 - Docstrings for `create_domain`, `FITDomain`, `create_brick!`, `create_sphere!`,
   `interpolate`, `get_curl`, `get_gradient`, `get_divergence`, `get_permittivity`,

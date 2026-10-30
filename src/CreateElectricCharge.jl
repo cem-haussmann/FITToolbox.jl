@@ -25,8 +25,8 @@ density. It is recomputed on the current grid, so it stays valid after
 `charge` (in C) is required and may be negative; there is no default, so a charge is
 never set without saying so. The position is given in `units`.
 
-Throws an `ArgumentError` if the position lies outside the domain or `name` is already
-used; nothing is recorded then.
+Throws an `ArgumentError` if the position lies outside the domain, if `charge` is not
+finite, or if `name` is already used; nothing is recorded then.
 
 # Example
 
@@ -54,7 +54,11 @@ function _charge_node(domain::FITDomain, pc::PointCharge)
 end
 
 # checked on its node alone, without the vector of the whole grid
-_check_source(domain::FITDomain, pc::PointCharge) = (_charge_node(domain, pc); nothing)
+function _check_source(domain::FITDomain, pc::PointCharge)
+    isfinite(pc.charge) || throw(ArgumentError("charge must be finite, got $(pc.charge) C"))
+    _charge_node(domain, pc)
+    return nothing
+end
 
 function _discretize_source(domain::FITDomain, pc::PointCharge)
     i, j, k = _charge_node(domain, pc)

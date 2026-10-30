@@ -79,9 +79,23 @@ function _replay!(domain::FITDomain; warn::Bool=false)
         step isa CreateObject            || continue   # skip DeleteObject steps
         step.obj_id in active            || continue   # skip objects deleted later
         step.object isa AbstractSolid    || continue   # sources do not paint material
-        _apply!(domain, step.object)
+        _apply_named!(domain, step)
     end
     return domain
+end
+
+# A solid of the history on the grid of `domain`. On another grid, from change_resolution
+# or load_domain, it can fail, e.g. lie outside a smaller domain: the error names the
+# object, as _check_sources does for the sources.
+function _apply_named!(domain::FITDomain, step::CreateObject)
+    try
+        _apply!(domain, step.object)
+    catch err
+        err isa ArgumentError || rethrow()
+        throw(ArgumentError("object \"$(step.name)\" (obj_id $(step.obj_id)) does not fit \
+                             this grid: $(err.msg)"))
+    end
+    return nothing
 end
 
 # Throws if a source does not fit the grid of `domain`, before it is recorded or a grid
@@ -174,8 +188,11 @@ history; if there are any, a warning says they are not carried over.
 
 Throws an `ArgumentError` if a resolution does not divide the extent of `domain` or
 the edges do not add up to it, or if an object cannot be created on the new grid, e.g.
-a brick thinner than one cell, or a loop source that no longer fits within
-`nodes[1] … nodes[end-2]`.
+a loop source that no longer fits within `nodes[1] … nodes[end-2]`; the error names the
+object. The extent stays, so no object moves outside the domain, but a solid that is
+thinner than about half a new cell, or reaches in by less than that, fills no cell any
+more: it stays in the history with the warning that it fills no cell, as when it is
+created on that grid, and fills cells again on a finer one.
 Source vectors obtained earlier with `get_source` are not updated; call
 `get_source` on the new domain.
 """
@@ -260,7 +277,11 @@ function _discretize_source(config::FITDomain, src::AbstractEdgeSource)
     return J
 end
 
-_check_source(config::FITDomain, src::AbstractEdgeSource) = (_unit_edges(config, src); nothing)
+function _check_source(config::FITDomain, src::AbstractEdgeSource)
+    isfinite(src.current) || throw(ArgumentError("current must be finite, got $(src.current) A"))
+    _unit_edges(config, src)
+    return nothing
+end
 
 function get_source(domain::FITDomain, obj_id::Int)
     e = _entry(domain, obj_id)

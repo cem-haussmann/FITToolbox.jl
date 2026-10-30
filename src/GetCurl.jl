@@ -47,11 +47,3 @@ function get_curl(config, ::Dual)
     C = get_curl(config, Primal())
     return sparse(C')
 end
-
-#function C(config)
-#    return get_curl(config, Primal())
-#end
-
-#function C̃(config)
-#    return get_curl(config, Dual())
-#end

@@ -35,7 +35,8 @@ background material, same history, so `list_objects` and `undo!` work as before.
 Throws an `ArgumentError` that names the file and the place in it if the file is not
 a domain file of format version 1, if a value is missing or of the wrong kind (e.g. a
 position without three coordinates, an unknown axis or colour, a cell width that is
-not positive), if the history is one that `create_*` and `remove_object!` could not
+not positive, a value that is `inf` or `nan`, a material that is not physical), if the
+history is one that `create_*` and `remove_object!` could not
 have produced (an obj_id or name used twice, an empty name, a delete of an object
 that does not exist), or if an object no longer fits the grid. A file that is not
 TOML at all throws the `TOML.ParserError` of the parser.
@@ -50,6 +51,7 @@ function load_domain(path::AbstractString)
                                         all(y -> _is_number(y) && isfinite(y) && y > 0, x),
                     "a list of positive cell widths") for key in ("edges_u", "edges_v", "edges_w")]
     σ, ε_r, μ_r = _number(g, "sigma", place), _number(g, "eps_r", place), _number(g, "mu_r", place)
+    _at_place(() -> _check_material(σ, ε_r, μ_r), place)
     obj_counter = _value(g, "obj_counter", place, x -> _is_integer(x) && x >= 0,
                          "a non-negative integer")
     raw = get(d, "steps", [])
@@ -60,8 +62,8 @@ function load_domain(path::AbstractString)
     domain = create_domain(edges...; σ, ε_r, μ_r)
     append!(domain._history.steps, steps)
     domain._history.obj_counter = obj_counter
-    _replay!(domain; warn=false)
-    _check_sources(domain)
+    # an object that does not fit the grid of the file, named, with the file in front
+    _at_place(() -> (_replay!(domain; warn=false); _check_sources(domain)), path)
     return domain
 end
 
@@ -80,10 +82,29 @@ function _value(t, key, place, ok, expected)
 end
 _shown(v) = (s = repr(v); length(s) > 60 ? first(s, 57) * "..." : s)
 
-_number(t, key, place) = _value(t, key, place, _is_number, "a number")
-_numbers(t, key, place, n) =
-    Tuple(_value(t, key, place, x -> x isa AbstractVector && length(x) == n && all(_is_number, x),
-                 "$n numbers"))
+# TOML has inf and nan; no value of a domain file may be either
+function _number(t, key, place)
+    v = _value(t, key, place, _is_number, "a number")
+    isfinite(v) || throw(ArgumentError("$place: \"$key\" must be finite, got $v"))
+    return v
+end
+function _numbers(t, key, place, n)
+    v = _value(t, key, place, x -> x isa AbstractVector && length(x) == n && all(_is_number, x),
+               "$n numbers")
+    all(isfinite, v) || throw(ArgumentError("$place: \"$key\" must be finite, got $(_shown(v))"))
+    return Tuple(v)
+end
+
+# An ArgumentError of the checks that create_* share, e.g. of the material, with the
+# place in the file in front
+function _at_place(f, place)
+    try
+        return f()
+    catch err
+        err isa ArgumentError || rethrow()
+        throw(ArgumentError("$place: $(err.msg)"))
+    end
+end
 _flag(t, key, place) = _value(t, key, place, x -> x isa Bool, "true or false")
 _text(t, key, place) = _value(t, key, place, x -> x isa AbstractString, "a string")
 
@@ -197,7 +218,8 @@ function _step_from_dict(d, place)
         color = haskey(d, "color") ?
             _value(d, "color", place, c -> c isa AbstractString && _valid_color(c),
                    "a hex code like \"#B87333\" or a colour name") : nothing
-        return Material(num("sigma"), num("eps_r"), num("mu_r"), color)
+        σ, ε_r, μ_r = num("sigma"), num("eps_r"), num("mu_r")
+        return _at_place(() -> Material(σ, ε_r, μ_r, color), place)
     end
     current() = haskey(d, "current_im") ? complex(num("current"), num("current_im")) : num("current")
     o = if t == "Brick"

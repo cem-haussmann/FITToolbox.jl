@@ -24,15 +24,109 @@ end
     fine = @test_logs (:warn, r"clipped") change_resolution(d, 0.05)
     @test count(fine.material[:, :, :, 2] .== 2.0) == 8 * 20 * 4
 
-    # still an error, nothing recorded: the corner outside, a length that is not
-    # positive, or less than half a cell left inside the domain (no warning then)
-    @test_throws "corner (1.2, 0.0, 0.0) m lies outside" create_brick!(d, 1.2, 0.0, 0.0, 0.2, 0.2, 0.2)
-    @test_throws "lies outside the domain" create_brick!(d, 0.5, -0.1, 0.0, 0.2, 0.5, 0.2)
+    # still an error, nothing recorded: a brick outside the domain altogether, a length
+    # that is not positive and finite, or a corner that is not finite (no warning then)
+    @test_logs @test_throws "the brick lies outside the domain: it spans u = 1.2 … 1.4 m, the domain u = 0.0 … 1.0 m" create_brick!(d, 1.2, 0.0, 0.0, 0.2, 0.2, 0.2)
+    @test_logs @test_throws "it spans v = -0.5 … -0.2 m" create_brick!(d, 0.5, -0.5, 0.0, 0.2, 0.3, 0.2)
+    @test_logs @test_throws "lies outside the domain" create_brick!(d, 0.5, -0.5, 0.0, 0.2, 0.5, 0.2)  # touches it
     @test_throws "lengths must be positive" create_brick!(d, 0.5, 0.5, 0.5, -0.2, 0.2, 0.2)
     @test_throws "lengths must be positive" create_brick!(d, 0.5, 0.5, 0.5, 0.2, 0.0, 0.2)
-    @test_logs @test_throws "zero extent in u" create_brick!(d, 0.98, 0.0, 0.0, 0.5, 0.2, 0.2)
-    @test_throws "zero extent in w" create_brick!(d, 0.5, 0.5, 0.5, 0.2, 0.2, 0.03)
+    @test_throws "positive and finite" create_brick!(d, 0.5, 0.5, 0.5, 0.2, Inf, 0.2)
+    @test_throws "corner must be finite" create_brick!(d, NaN, 0.5, 0.5, 0.2, 0.2, 0.2)
     @test length(d._history.steps) == 1
+
+    # less than about half a cell in the domain along an axis: no cell, a warning, and
+    # recorded, as for a sphere thinner than a cell. Reaching in by 2 cm of a 10 cm cell:
+    @test_logs (:warn, r"clipped") (:warn, r"no cells were filled — the brick is thinner than about half a cell in u") create_brick!(d, 0.98, 0.0, 0.0, 0.5, 0.2, 0.2; ε_r = 7.0)
+    # a foil of 3 cm in w, and one thin in v and w at once
+    @test_logs (:warn, r"thinner than about half a cell in w after") create_brick!(d, 0.5, 0.5, 0.5, 0.2, 0.2, 0.03; ε_r = 7.0)
+    @test_logs (:warn, r"in v, w after") create_brick!(d, 0.5, 0.5, 0.5, 0.2, 0.03, 0.03; ε_r = 7.0)
+    @test length(list_objects(d)) == 4 && !any(==(7.0), d.material[:, :, :, 2])
+    # on a grid fine enough, the foil fills its cells
+    fine = Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+        change_resolution(d, 0.01)
+    end
+    # 2 × 20 × 20 cells of the first, 20 × 20 × 3 of the foil, the third inside the foil
+    @test count(==(7.0), fine.material[:, :, :, 2]) == 2 * 20 * 20 + 20 * 20 * 3
+end
+
+@testset "create_brick!: reaching below the domain" begin
+    # clipped on the lower side as on the upper one: a plate through the whole domain
+    # can start before it
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test_logs (:warn, r"clipped") create_brick!(d, -0.2, 0.0, 0.3, 0.5, 1.0, 0.2; ε_r = 3.0)
+    filled = d.material[:, :, :, 2] .== 3.0
+    @test all(filled[1:3, :, 4:5]) && count(filled) == 3 * 10 * 2   # u = 0 … 0.3 m
+    # all six sides at once
+    @test_logs (:warn, r"clipped") create_brick!(d, -1, -1, -1, 3, 3, 3; σ = 1.0)
+    @test all(d.material[:, :, :, 1] .== 1.0)
+end
+
+@testset "solids check their material" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    for (kw, msg) in (((; σ = -5.0), "σ must be finite and not negative"),
+                      ((; σ = Inf), "σ must be finite"),
+                      ((; ε_r = 0.0), "ε_r must be finite and positive"),
+                      ((; ε_r = NaN), "ε_r must be finite and positive"),
+                      ((; μ_r = -1.0), "μ_r must be finite and positive"),
+                      ((; μ_r = 0.0), "μ_r must be finite and positive"))
+        @test_throws msg create_brick!(d, 0, 0, 0, 0.5, 0.5, 0.5; kw...)
+        @test_throws msg create_sphere!(d, 0.5, 0.5, 0.5, 0.2; kw...)
+        @test_throws msg create_cylinder!(d, 0.5, 0.5, 0.1, 0.2, 0.5, DirZ(); kw...)
+        @test_throws msg create_torus!(d, 0.5, 0.5, 0.5, 0.3, 0.1, DirZ(); kw...)
+        @test_throws msg create_helix!(d, 0.5, 0.5, 0.1, 0.3, 0.05, 0.2, 2, DirZ(); kw...)
+        @test_throws msg create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1]; kw...)
+        @test_throws msg create_domain([0.1, 0.1], [0.1], [0.1]; kw...)
+    end
+    @test isempty(list_objects(d))
+    # a perfect insulator and the extremes that are physical are fine
+    @test create_brick!(d, 0, 0, 0, 0.5, 0.5, 0.5; σ = 0.0, ε_r = 1e-3, μ_r = 1e5) == 1
+end
+
+@testset "solids reject infinite lengths" begin
+    d = create_domain([1.0, 1.0, 1.0], [0.1, 0.1, 0.1])
+    @test_throws "radius must be positive and finite" create_sphere!(d, 0.5, 0.5, 0.5, Inf)
+    @test_throws "radius must be positive and finite" create_cylinder!(d, 0.5, 0.5, 0.1, Inf, 0.5, DirZ())
+    @test_throws "height must be positive and finite" create_cylinder!(d, 0.5, 0.5, 0.1, 0.2, Inf, DirZ())
+    @test_throws "ring radius R must be positive and finite" create_torus!(d, 0.5, 0.5, 0.5, Inf, 0.1, DirZ())
+    @test_throws "turns must be positive and finite" create_helix!(d, 0.5, 0.5, 0.1, 0.3, 0.05, 0.2, Inf, DirZ())
+    @test_throws "pitch must be positive and finite" create_helix!(d, 0.5, 0.5, 0.1, 0.3, 0.05, NaN, 2, DirZ())
+    @test isempty(list_objects(d))
+end
+
+@testset "round solids: the centre or base may lie outside the domain" begin
+    # as a brick's corner may: the solid is clipped to the part that reaches in, with a
+    # warning. A sphere centred 1 cm beyond the wall is nearly the half sphere of one
+    # centred on it, not an error.
+    d = create_domain([1.0, 1.0, 1.0], [0.05, 0.05, 0.05])
+    filled(v) = findall(==(v), d.material[:, :, :, 2])
+    @test_logs (:warn, r"clipped") create_sphere!(d, 0.0, 0.5, 0.5, 0.3; ε_r = 2.0)
+    @test_logs (:warn, r"clipped") create_sphere!(d, -0.01, 0.5, 0.5, 0.3; ε_r = 3.0)
+    on_wall, outside = length(filled(2.0)) + length(filled(3.0)), length(filled(3.0))
+    @test 0.8 * on_wall < outside < on_wall
+    @test all(c -> d.nodes_u[c[1] + 1] <= 0.3 + 1e-12, filled(3.0))   # the cap, u ≤ 0.29 m
+    @test_logs (:warn, r"clipped") create_cylinder!(d, 0.5, 0.5, -0.2, 0.1, 0.5, DirZ(); ε_r = 4.0)
+    @test all(c -> d.nodes_w[c[3] + 1] <= 0.3 + 1e-12, filled(4.0)) && !isempty(filled(4.0))
+    @test_logs (:warn, r"clipped") create_torus!(d, 1.1, 0.5, 0.5, 0.2, 0.05, DirZ(); ε_r = 5.0)
+    @test !isempty(filled(5.0))
+    @test_logs (:warn, r"clipped") (:warn, r"gap") match_mode = :any create_helix!(d, 0.5, 0.5, -0.1, 0.2, 0.03, 0.1, 4, DirZ(); ε_r = 6.0)
+    @test !isempty(filled(6.0))
+    @test length(list_objects(d)) == 5
+
+    # outside the domain altogether: an error, nothing recorded, also when it only
+    # touches the domain from outside
+    for f in (() -> create_sphere!(d, 5.0, 0.5, 0.5, 0.3),
+              () -> create_sphere!(d, -0.3, 0.5, 0.5, 0.3),            # touches u = 0
+              () -> create_cylinder!(d, 0.5, 0.5, 1.2, 0.1, 0.5, DirZ()),
+              () -> create_cylinder!(d, 0.5, 0.5, -0.6, 0.1, 0.5, DirZ()),   # ends below w = 0
+              () -> create_torus!(d, 0.5, 0.5, 1.2, 0.2, 0.05, DirZ()),
+              () -> create_helix!(d, 0.5, 1.5, 0.1, 0.2, 0.03, 0.1, 4, DirZ()))
+        @test_logs @test_throws "lies outside the domain" f()
+    end
+    @test_throws "the sphere lies outside the domain: it spans u = 4.7 … 5.3 m, the domain u = 0.0 … 1.0 m" create_sphere!(d, 5.0, 0.5, 0.5, 0.3)
+    @test_throws "sphere centre must be finite" create_sphere!(d, NaN, 0.5, 0.5, 0.3)
+    @test_throws "cylinder base must be finite" create_cylinder!(d, 0.5, Inf, 0.1, 0.1, 0.5, DirZ())
+    @test length(list_objects(d)) == 5
 end
 
 @testset "create_brick!: snaps like the loops and charges" begin
@@ -193,8 +287,10 @@ end
     @test_throws "ring radius R must be positive" create_torus!(e, 0.5, 0.5, 0.5, 0.0, 0.05, DirZ())
     @test_throws "tube radius r must be positive" create_torus!(e, 0.5, 0.5, 0.5, 0.2, -0.05, DirZ())
     @test_throws "closes the hole"                create_torus!(e, 0.5, 0.5, 0.5, 0.2, 0.2, DirZ())
-    @test_throws "outside the domain"             create_torus!(e, 0.5, 1.2, 0.5, 0.2, 0.05, DirZ())
+    @test_throws "outside the domain"             create_torus!(e, 0.5, 1.3, 0.5, 0.2, 0.05, DirZ())
     @test isempty(e._history.steps)
+    # centred outside, but the ring reaches in (v = 0.95 … 1.45 m): clipped
+    @test_logs (:warn, r"clipped") create_torus!(e, 0.5, 1.2, 0.5, 0.2, 0.05, DirZ())
 
     # reaching past the boundary: clipped, with a warning; along the axis only r counts
     @test_logs (:warn, r"clipped") create_torus!(e, 0.5, 0.25, 0.5, 0.2, 0.06, DirZ())

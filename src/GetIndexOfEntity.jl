@@ -9,7 +9,6 @@ const DualEdgeOrPrimalFacet = Union{DualEdge, PrimalFacet}
 const PrimalNodeDualVolume  = Union{PrimalNode, DualVolume}
 const DualNodePrimalVolume  = Union{DualNode, PrimalVolume}
 
-const AnyDirection = Union{DirX,DirY,DirZ}
 
 function _find_index(positions::AbstractVector, val::Real)
     idx = clamp(searchsortedlast(positions, val), 1, length(positions))
@@ -40,7 +39,7 @@ index lies in `1:Np`.
 
 Positions outside the domain are not rejected: the nearest entity on the boundary is
 returned. A warning is issued whenever the distance to the requested position exceeds
-`atol` (in metres). [`get_position_of_index`](@ref) is the inverse.
+`atol` (in metres). `get_position_of_index` is the inverse.
 
 # Example
 
@@ -90,8 +89,6 @@ function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::DirX, x, y, z)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.nodes_w, z)
     
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
-    
     return i, j, k, config.edges_u_center[i], config.nodes_v[j], config.nodes_w[k]
 end
 
@@ -101,8 +98,6 @@ function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::DirY, x, y, z)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.nodes_w, z)
     
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
-    
     return i, j, k, config.nodes_u[i], config.edges_v_center[j], config.nodes_w[k]
 end
 
@@ -111,8 +106,6 @@ function _get_ijk_and_coords(config, ::PrimalEdgeOrDualFacet, ::DirZ, x, y, z)
     i = _find_index(config.nodes_u, x)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.edges_w_center, z)
-    
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
     
     return i, j, k, config.nodes_u[i], config.nodes_v[j], config.edges_w_center[k]
 end
@@ -125,8 +118,6 @@ function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::DirX, x, y, z)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.edges_w_center, z)
     
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
-    
     return i, j, k, config.nodes_u[i], config.edges_v_center[j], config.edges_w_center[k]
 end
 
@@ -135,8 +126,6 @@ function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::DirY, x, y, z)
     i = _find_index(config.edges_u_center, x)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.edges_w_center, z)
-    
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
     
     return i, j, k, config.edges_u_center[i], config.nodes_v[j], config.edges_w_center[k]
 end
@@ -147,20 +136,16 @@ function _get_ijk_and_coords(config, ::DualEdgeOrPrimalFacet, ::DirZ, x, y, z)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.nodes_w, z)
     
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
-    
     return i, j, k, config.edges_u_center[i], config.edges_v_center[j], config.nodes_w[k]
 end
 
 
 ####PrimalNodeDualVolume
 # All-Direction
-function _get_ijk_and_coords(config, ::PrimalNodeDualVolume, ::AnyDirection, x, y, z)
+function _get_ijk_and_coords(config, ::PrimalNodeDualVolume, ::Direction, x, y, z)
     i = _find_index(config.nodes_u, x)
     j = _find_index(config.nodes_v, y)
     k = _find_index(config.nodes_w, z)
-    
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
     
     return i, j, k, config.nodes_u[i], config.nodes_v[j], config.nodes_w[k]
 end
@@ -168,12 +153,10 @@ end
 
 ####DualNodePrimalVolume
 # All-Direction
-function _get_ijk_and_coords(config, ::DualNodePrimalVolume, ::AnyDirection, x, y, z)
+function _get_ijk_and_coords(config, ::DualNodePrimalVolume, ::Direction, x, y, z)
     i = _find_index(config.edges_u_center, x)
     j = _find_index(config.edges_v_center, y)
     k = _find_index(config.edges_w_center, z)
-    
-    (isnothing(i) || isnothing(j) || isnothing(k)) && return nothing
     
     return i, j, k, config.edges_u_center[i], config.edges_v_center[j], config.edges_w_center[k]
 end
@@ -193,9 +176,9 @@ _coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::DirY, i, j, k) =
 _coords_of_ijk(c, ::DualEdgeOrPrimalFacet, ::DirZ, i, j, k) =
     (c.edges_u_center[i], c.edges_v_center[j], c.nodes_w[k])
 
-_coords_of_ijk(c, ::PrimalNodeDualVolume, ::AnyDirection, i, j, k) =
+_coords_of_ijk(c, ::PrimalNodeDualVolume, ::Direction, i, j, k) =
     (c.nodes_u[i],        c.nodes_v[j],        c.nodes_w[k])
-_coords_of_ijk(c, ::DualNodePrimalVolume, ::AnyDirection, i, j, k) =
+_coords_of_ijk(c, ::DualNodePrimalVolume, ::Direction, i, j, k) =
     (c.edges_u_center[i], c.edges_v_center[j], c.edges_w_center[k])
 
 # The same layout per axis: true where the entity sits at the edge centres, N - 1
@@ -206,5 +189,5 @@ _centred(::PrimalEdgeOrDualFacet, ::DirZ) = (false, false, true)
 _centred(::DualEdgeOrPrimalFacet, ::DirX) = (false, true,  true)
 _centred(::DualEdgeOrPrimalFacet, ::DirY) = (true,  false, true)
 _centred(::DualEdgeOrPrimalFacet, ::DirZ) = (true,  true,  false)
-_centred(::PrimalNodeDualVolume, ::AnyDirection) = (false, false, false)
-_centred(::DualNodePrimalVolume, ::AnyDirection) = (true,  true,  true)
+_centred(::PrimalNodeDualVolume, ::Direction) = (false, false, false)
+_centred(::DualNodePrimalVolume, ::Direction) = (true,  true,  true)

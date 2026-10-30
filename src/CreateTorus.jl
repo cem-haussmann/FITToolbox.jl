@@ -34,10 +34,11 @@ With `color = "background"` the torus is a cut-out: it takes the background mate
 the domain (`σ`, `ε_r` and `μ_r` are ignored), e.g. to cut a hole into an earlier object,
 and `view_domain` shows it as such.
 
-Throws an `ArgumentError` if `R` or `r` is not positive, if `r ≥ R` (the tube would close
-the hole), if the centre lies outside the domain, or if `name` is already used; nothing
-is recorded then. Warns if the torus reaches beyond the domain (it is clipped) or fills
-no cell.
+Throws an `ArgumentError` if `R` or `r` is not positive and finite, if `r ≥ R` (the tube
+would close the hole), if the torus lies outside the domain altogether, if the material
+is not physical (see `create_domain`), or if `name` is already used; nothing is recorded
+then. Warns if the torus reaches beyond the domain (it is clipped) or fills no cell. Its
+centre may lie outside, as long as part of the ring reaches in.
 
 # Example
 
@@ -83,16 +84,15 @@ end
 
 function _apply!(domain::FITDomain, tor::Torus)
     R, r = tor.major_radius, tor.minor_radius
-    σ, ε_r, μ_r = tor.material.σ, tor.material.ε_r, tor.material.μ_r
 
-    R > 0 || throw(ArgumentError("ring radius R must be positive, got $R m"))
-    r > 0 || throw(ArgumentError("tube radius r must be positive, got $r m"))
+    _positive_length(R) || throw(ArgumentError("ring radius R must be positive and finite, got $R m"))
+    _positive_length(r) || throw(ArgumentError("tube radius r must be positive and finite, got $r m"))
     r < R || throw(ArgumentError("tube radius r = $r m must be smaller than the ring radius \
                                   R = $R m, otherwise the tube closes the hole"))
 
     nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
-    all(d -> _within(tor.center[d], nodes[d]), 1:3) ||
-        throw(ArgumentError("torus centre $(tor.center) m lies outside the domain"))
+    # the centre may lie outside, as long as the torus reaches into the domain
+    _check_reaches_domain(domain, tor, "torus", "centre")
 
     a = _axis_index(tor.axis)                 # along the axis
 
@@ -102,48 +102,5 @@ function _apply!(domain::FITDomain, tor::Torus)
               _within(tor.center[d] + reach[d], nodes[d]), 1:3) &&
         @warn "torus extends beyond the domain and will be clipped" R r center=tor.center
 
-    Nu, Nv, Nw = domain.Nu, domain.Nv, domain.Nw
-    md = domain.material
-
-    # Node positions relative to the centre
-    du = domain.nodes_u .- tor.center[1]
-    dv = domain.nodes_v .- tor.center[2]
-    dw = domain.nodes_w .- tor.center[3]
-    inside = _inside_test(tor)
-
-    # k outermost for threading (stride Nu*Nv, so threads write far apart),
-    # i innermost because md is contiguous in i.
-    # only the cells around the solid can be filled: scan those, not the whole grid
-    cells = _cell_ranges(domain, _extent(tor))
-    filled = zeros(Int, Nw-1)
-    @threads for k in cells[3]
-        ww = (dw[k+1] - dw[k]) / 6.0
-        w_samples = (dw[k] + ww, dw[k] + 3.0*ww, dw[k] + 5.0*ww)
-
-        @inbounds for j in cells[2]
-            vw = (dv[j+1] - dv[j]) / 6.0
-            v_samples = (dv[j] + vw, dv[j] + 3.0*vw, dv[j] + 5.0*vw)
-
-            for i in cells[1]
-                uw = (du[i+1] - du[i]) / 6.0
-                u_samples = (du[i] + uw, du[i] + 3.0*uw, du[i] + 5.0*uw)
-
-                # 27 sub-voxel centres at 1/6, 3/6, 5/6 of the cell in each direction
-                count_inside = 0
-                for us in u_samples, vs in v_samples, ws in w_samples
-                    inside((us, vs, ws)) && (count_inside += 1)
-                end
-
-                # 50% fill rule, as for the sphere: 14 or more of 27 inside
-                if count_inside >= 14
-                    md[i, j, k, 1] = σ
-                    md[i, j, k, 2] = ε_r
-                    md[i, j, k, 3] = μ_r
-                    filled[k] += 1
-                end
-            end
-        end
-    end
-
-    sum(filled) > 0 || @warn "no cells were filled — is the tube radius smaller than one cell?"
+    _paint!(domain, tor) > 0 || @warn "no cells were filled — is the tube radius smaller than one cell?"
 end

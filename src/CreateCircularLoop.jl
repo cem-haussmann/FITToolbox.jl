@@ -49,8 +49,8 @@ takes the radius first.
 Throws an `ArgumentError` if the centre coordinate along the normal lies outside
 `nodes[1] … nodes[end-2]` in that direction, if the circle does not fit within
 `nodes[1] … nodes[end-2]` in the two in-plane directions, if the grid has fewer than
-three nodes in a direction (that range is then empty), if the radius is not positive,
-or if `name` is already used. Nothing is recorded then. Warns if the radius is too
+three nodes in a direction (that range is then empty), if the radius is not positive
+and finite, if `current` is not finite, or if `name` is already used. Nothing is recorded then. Warns if the radius is too
 small to mark any edge.
 
 # Example
@@ -85,20 +85,28 @@ end
 # along the normal, and the circle within them in the two in-plane directions
 function _check_loop_fits(config::FITDomain, loop::CircularLoop)
     R = loop.radius
-    R > 0 || throw(ArgumentError("radius must be positive, got $R m"))
+    _positive_length(R) || throw(ArgumentError("radius must be positive and finite, got $R m"))
     _check_loop_grid(config)
     nodes = (config.nodes_u, config.nodes_v, config.nodes_w)
     names = ("u", "v", "w")
     inner(d, x) = _within(x, nodes[d], nodes[d][1], nodes[d][end-2])
     a = _axis_index(loop.normal)
     inner(a, loop.center[a]) ||
-        throw(ArgumentError("coil plane lies outside the domain in $(names[a])-direction"))
+        throw(ArgumentError("the coil plane does not fit in the domain in $(names[a])-direction: \
+                             it must lie within $(_loop_range(nodes, names, a)), got \
+                             $(names[a]) = $(_short(loop.center[a])) m"))
     for d in _inplane_axes(loop.normal)
         inner(d, loop.center[d] - R) && inner(d, loop.center[d] + R) ||
-            throw(ArgumentError("coil does not fit in the domain in $(names[d])-direction"))
+            throw(ArgumentError("coil does not fit in the domain in $(names[d])-direction: \
+                                 it must lie within $(_loop_range(nodes, names, d)), got \
+                                 $(_short(loop.center[d] - R)) … $(_short(loop.center[d] + R)) m"))
     end
     return nothing
 end
+
+# The range a loop must lie within along axis d, for the error messages of both loops
+_loop_range(nodes, names, d) =
+    "$(names[d]) = $(_short(nodes[d][1])) … $(_short(nodes[d][end-2])) m (nodes[1] … nodes[end-2])"
 
 # A current loop must be closed: S̃J = 0, the dual divergence, is discrete current
 # continuity, and the curl–curl system has no solution without it. The loops are closed

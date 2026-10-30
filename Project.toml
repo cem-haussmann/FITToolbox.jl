@@ -16,15 +16,19 @@ Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 FITToolboxMakieExt = "Makie"
 
 [compat]
+Aqua = "0.8"
+CairoMakie = "0.15"
 LinearAlgebra = "1.10"
 Makie = "0.24"
 SparseArrays = "1.10"
-julia = "1.10"
 TOML = "1"
+Test = "1.10"
+julia = "1.10"
 
 [extras]
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "CairoMakie"]
+test = ["Aqua", "Test", "CairoMakie"]

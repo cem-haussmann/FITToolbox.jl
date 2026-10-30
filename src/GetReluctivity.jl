@@ -3,7 +3,7 @@
 #Date: 16/09/2025
 
 """
-    get_reluctivity(config) -> SparseMatrixCSC
+    get_reluctivity(config) -> Diagonal    # M_ν, 3Np × 3Np
  
 Build the FIT reluctivity matrix: a diagonal matrix with one entry per primal facet,
 mapping facet fluxes to the magnetic voltages along the corresponding dual edges.
@@ -15,7 +15,7 @@ divided by the primal facet area. Permeability is read from
 or `NaN` values throw an `ArgumentError`.
  
 This is the counterpart of the dual-facet averaging used by
-[`get_permittivity`](@ref) and [`get_conductivity`](@ref): there the material is
+`get_permittivity` and `get_conductivity`: there the material is
 averaged over a dual facet, here along a dual edge, which is the consistent choice
 for a quantity whose normal flux is continuous across material interfaces.
  
@@ -29,7 +29,7 @@ The dead facets in the last plane of each direction, i.e. the tangential facet
 components on the three positive faces, have no dual edge and receive exactly
 zero. The matrix is therefore only positive semidefinite on the full 3Nₚ space:
 restrict to real facets, or use a diagonal pseudo-inverse (1/0 := 0), before
-inverting it.
+inverting it. Like `get_permittivity`, it is a `Diagonal`.
  
 # Example
  
@@ -92,9 +92,11 @@ function get_reluctivity(config)
                                                                 Extended_Edge_W[k]*0.5*materialPropertyOfEachVoxel[i+1,j+1,k]) / A_w[i+1,j+1]
         end
     end
-    return spdiagm(0=>newAveragedMaterialProperty)  
+    return Diagonal(newAveragedMaterialProperty)
 end
 
+# Shorthand as in the equations, not exported: user code names its matrices M_ν
+# (`M_ν = get_reluctivity(domain)`), which an exported function of that name would break
 function M_ν(config)
     return get_reluctivity(config)
 end

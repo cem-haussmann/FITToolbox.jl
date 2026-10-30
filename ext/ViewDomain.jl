@@ -166,24 +166,22 @@ end
 # --- Voxel view ------------------------------------------------------------
 
 # The object each cell belongs to: the obj_id of the solid that wrote it last, 0 for
-# the background. The history is replayed into a scratch domain on the same grid with
-# every solid's σ set to its obj_id, so overlaps resolve exactly as in the material.
-# Values written directly into domain.material belong to no object and are not shown.
+# the background. Every solid writes its obj_id into the cells it takes, in the order of
+# the history, by the same routine that paints its material, so overlaps resolve exactly
+# as in the material. One byte per cell up to obj_id 255, two up to 65535: the
+# smallest integer that holds them. Values written directly into domain.material belong
+# to no object and are not shown.
 function _owner_labels(domain)
-    scratch = FITToolbox.create_domain(domain.edges_u, domain.edges_v, domain.edges_w; units = "m")
-    # the objects warned about clipping etc. when they were created
-    Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
-        for e in FITToolbox.list_objects(domain).entries
-            e.object isa FITToolbox.AbstractSolid || continue
-            id = _is_background(e.object) ? 0 : e.obj_id      # background: a hole
-            FITToolbox._apply!(scratch, _with_material(e.object, FITToolbox.Material(id, 1.0, 1.0)))
-        end
+    solids = [e for e in FITToolbox.list_objects(domain).entries if e.object isa FITToolbox.AbstractSolid]
+    top = maximum(e.obj_id for e in solids; init = 0)
+    T = top <= typemax(UInt8) ? UInt8 : top <= typemax(UInt16) ? UInt16 : UInt32
+    label = zeros(T, domain.Nu - 1, domain.Nv - 1, domain.Nw - 1)
+    for e in solids
+        id = _is_background(e.object) ? zero(T) : T(e.obj_id)      # background: a hole
+        FITToolbox._fill_cells!((i, j, k) -> (@inbounds label[i, j, k] = id), domain, e.object)
     end
-    return round.(Int32, view(scratch.material, :, :, :, 1))      # half the memory of Int
+    return label
 end
-
-# a copy of a solid with another material
-_with_material(o, m) = typeof(o)((f === :material ? m : getfield(o, f) for f in fieldnames(typeof(o)))...)
 
 # The six faces of a cell: corners wound counter-clockwise seen from outside, so the
 # normals point out (corner c = 1 + dx + 2dy + 4dz), and the step to the neighbour
@@ -212,33 +210,88 @@ are drawn as they are. With `keep = (axis, m)`, cells beyond index `m` along `ax
 count as empty: a cut then shows a filled cross-section instead of a hollow shell.
 """
 _voxel_meshes(domain, label; keep = nothing) =
-    keep === nothing ? _voxel_meshes(domain, label, 0, 0) : _voxel_meshes(domain, label, keep...)
+    _voxel_cut(domain, label, _voxel_faces(domain, label); keep)
 
-function _voxel_meshes(domain, label::AbstractArray{<:Integer,3}, keep_axis::Int, keep_m::Int)
+# The exposed faces of one label: four corners per face, and the cell it bounds
+struct _VoxelFaces
+    corners::Vector{Point3f}
+    cells::Vector{NTuple{3,Int32}}
+end
+
+# the corners of face `quad` (of _CELL_FACES) of cell (i, j, k), onto P
+@inline function _push_face!(P, nodes, i, j, k, quad)
+    for c in quad
+        push!(P, Point3f(nodes[1][i + ((c - 1) & 1)], nodes[2][j + ((c - 1) >> 1 & 1)],
+                         nodes[3][k + ((c - 1) >> 2 & 1)]))
+    end
+end
+
+# The exposed faces of every label, from one scan of the grid. A cut is made from them
+# (_voxel_cut) without scanning the grid again: moving the cut costs in proportion to
+# the surface of the objects, not to the number of cells.
+function _voxel_faces(domain, label::AbstractArray{<:Integer,3})
     nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
     n = size(label)
-    lab(i, j, k) = (1 <= i <= n[1] && 1 <= j <= n[2] && 1 <= k <= n[3] &&
-                    (keep_axis == 0 || (i, j, k)[keep_axis] <= keep_m)) ? label[i, j, k] :
-                                                                         zero(eltype(label))
-    pts = Dict{Int,Vector{Point3f}}()
-    fcs = Dict{Int,Vector{_TriFace}}()
+    lab(i, j, k) = (1 <= i <= n[1] && 1 <= j <= n[2] && 1 <= k <= n[3]) ? label[i, j, k] :
+                                                                          zero(eltype(label))
+    out = Dict{Int,_VoxelFaces}()
+    last_id, F = 0, _VoxelFaces(Point3f[], NTuple{3,Int32}[])
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
-        id = lab(i, j, k)
+        id = label[i, j, k]
         id == 0 && continue
-        corner(c) = Point3f(nodes[1][i + ((c - 1) & 1)], nodes[2][j + ((c - 1) >> 1 & 1)],
-                            nodes[3][k + ((c - 1) >> 2 & 1)])
         for (quad, (di, dj, dk)) in _CELL_FACES
             lab(i + di, j + dj, k + dk) == id && continue
-            P = get!(Vector{Point3f}, pts, id)
-            F = get!(Vector{_TriFace}, fcs, id)
-            b = length(P)
-            for c in quad
-                push!(P, corner(c))
-            end
-            push!(F, _TriFace(b + 1, b + 2, b + 3), _TriFace(b + 1, b + 3, b + 4))
+            # neighbouring cells mostly share a label: look it up only when it changes
+            id == last_id || (last_id = Int(id);
+                              F = get!(() -> _VoxelFaces(Point3f[], NTuple{3,Int32}[]), out, last_id))
+            _push_face!(F.corners, nodes, i, j, k, quad)
+            push!(F.cells, (Int32(i), Int32(j), Int32(k)))
         end
     end
-    return Dict(id => Makie.GeometryBasics.Mesh(pts[id], fcs[id]) for id in keys(pts))
+    return out
+end
+
+# Two triangles per face of four corners
+function _quads_mesh(P)
+    faces = Vector{_TriFace}(undef, length(P) ÷ 2)
+    @inbounds for q in 1:length(P) ÷ 4
+        b = 4(q - 1)
+        faces[2q-1] = _TriFace(b + 1, b + 2, b + 3)
+        faces[2q]   = _TriFace(b + 1, b + 3, b + 4)
+    end
+    return Makie.GeometryBasics.Mesh(P, faces)
+end
+
+# The meshes of the faces of `faces` (from _voxel_faces), one per label. With
+# keep = (axis, m): the faces of the cells up to index m along `axis`, and the cut closed
+# by the faces of layer m whose neighbour beyond carries the same label, which had no
+# face as they lie inside the object. The same as scanning the grid with the cells
+# beyond m counted as empty, at the cost of the faces plus one layer of cells.
+function _voxel_cut(domain, label, faces; keep = nothing)
+    keep === nothing &&
+        return Dict{Int,Any}(id => _quads_mesh(F.corners) for (id, F) in faces if !isempty(F.cells))
+    axis, m = keep
+    pts = Dict{Int,Vector{Point3f}}()
+    for (id, F) in faces
+        P = Point3f[]
+        @inbounds for q in eachindex(F.cells)
+            F.cells[q][axis] <= m || continue
+            append!(P, view(F.corners, 4q-3:4q))
+        end
+        isempty(P) || (pts[id] = P)
+    end
+    if 1 <= m < size(label, axis)
+        nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
+        quad = first(_CELL_FACES[2axis])                  # the face towards +axis
+        a, b = filter(!=(axis), (1, 2, 3))
+        @inbounds for jb in axes(label, b), ja in axes(label, a)
+            ijk = ntuple(d -> d == axis ? m : d == a ? ja : jb, 3)
+            id = label[ijk...]
+            (id != 0 && label[ntuple(d -> ijk[d] + (d == axis), 3)...] == id) || continue
+            _push_face!(get!(Vector{Point3f}, pts, Int(id)), nodes, ijk..., quad)
+        end
+    end
+    return Dict{Int,Any}(id => _quads_mesh(P) for (id, P) in pts)
 end
 
 # --- Panel widgets ---------------------------------------------------------
@@ -277,18 +330,20 @@ end
 
 # --- Drawing ---------------------------------------------------------------
 
-_draw_object!(scene, b::FITToolbox.Brick, color; kw...) =
-    mesh!(scene, Rect3f(Point3f(b.origin), Vec3f(b.lengths)); color, kw...)
+# A solid as defined, drawn from its mesh (_object_mesh); merged with others of its colour
+# when there are many objects (_draw_merged!)
+_draw_object!(scene, o::FITToolbox.AbstractSolid, color; kw...) = mesh!(scene, _object_mesh(o); color, kw...)
 
-_draw_object!(scene, c::FITToolbox.Cylinder, color; kw...) =
-    mesh!(scene, Makie.GeometryBasics.normal_mesh(Makie.Tessellation(
-                     Makie.GeometryBasics.Cylinder(Point3f(c.base), Point3f(_cylinder_top(c)),
-                                                   Float32(c.radius)), 64));
-          color, kw...)
+_object_mesh(b::FITToolbox.Brick) =
+    Makie.GeometryBasics.normal_mesh(Rect3f(Point3f(b.origin), Vec3f(b.lengths)))
+
+_object_mesh(c::FITToolbox.Cylinder) =
+    Makie.GeometryBasics.normal_mesh(Makie.Tessellation(
+        Makie.GeometryBasics.Cylinder(Point3f(c.base), Point3f(_cylinder_top(c)), Float32(c.radius)), 64))
 
 _cylinder_top(c) = ntuple(d -> d == _axis_index(c.axis) ? c.base[d] + c.height : c.base[d], 3)
 
-_draw_object!(scene, t::FITToolbox.Torus, color; kw...) = mesh!(scene, _torus_mesh(t); color, kw...)
+_object_mesh(t::FITToolbox.Torus) = _torus_mesh(t)
 
 # A torus as a triangle mesh: `n` segments around the axis, `m` around the tube, with
 # normals pointing out of the tube
@@ -313,7 +368,7 @@ function _torus_mesh(t::FITToolbox.Torus; n = 64, m = 32)
     return Makie.GeometryBasics.Mesh(pts, faces; normal = nrm)
 end
 
-_draw_object!(scene, h::FITToolbox.Helix, color; kw...) = mesh!(scene, _helix_mesh(h); color, kw...)
+_object_mesh(h::FITToolbox.Helix) = _helix_mesh(h)
 
 # A helix as one triangle mesh: rings of `m` vertices around the wire, `n` per turn along
 # it, and its round ends as half spheres of `nc` rings each, continuing the same grid
@@ -354,10 +409,8 @@ function _helix_mesh(h::FITToolbox.Helix; n = 48, m = 16, nc = 6)
     return Makie.GeometryBasics.Mesh(pts, faces; normal = nrms)
 end
 
-_draw_object!(scene, s::FITToolbox.Sphere, color; kw...) =
-    mesh!(scene, Makie.GeometryBasics.normal_mesh(
-                     Makie.Tessellation(Makie.Sphere(Point3f(s.center), Float32(s.radius)), 64));
-          color, kw...)
+_object_mesh(s::FITToolbox.Sphere) =
+    Makie.GeometryBasics.normal_mesh(Makie.Tessellation(Makie.Sphere(Point3f(s.center), Float32(s.radius)), 64))
 
 # the caller sets the linewidth: it changes when the loop is shown on its grid edges
 _draw_object!(scene, c::FITToolbox.AbstractEdgeSource, color; kw...) =
@@ -383,52 +436,25 @@ function _hide_object!(shown, entries, info, id)
     return nothing
 end
 
-# Walk up from a picked primitive to the plot drawn for an object
-function _picked_id(plot_ids, plt)
+# Walk up from a picked primitive to the plot drawn for an object; in a merged plot the
+# picked index (a vertex, point or marker) says which of its objects it was
+function _picked_id(plot_ids, plt, idx = 0)
     while plt !== nothing
-        haskey(plot_ids, plt) && return plot_ids[plt]
+        if haskey(plot_ids, plt)
+            v = plot_ids[plt]
+            v isa _Merged || return v
+            k = findfirst(r -> idx in first(r), v.ranges)
+            return k === nothing ? nothing : last(v.ranges[k])
+        end
         plt = plt.parent isa Makie.AbstractPlot ? plt.parent : nothing
     end
     return nothing
 end
 
-function FITToolbox.view_domain(domain::FITToolbox.FITDomain, fields::Pair...;
-                                size = (1400, 750), refine::Int = 1)
-    _check_3d_backend()
-    fig, _ = _view_figure(domain, fields...; size, refine)
-    return fig
-end
+# --- A plot per object, up to _MAX_OBJECT_TOGGLES of them --------------------
 
-# The figure with all its controls, and the state they act on, for the tests:
-# CairoMakie cannot draw it, but can build it and run every callback.
-function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
-                      size = (1400, 750), refine::Int = 1)
-    refine >= 1 || throw(ArgumentError("refine must be at least 1, got $refine"))
-    specs = _field_specs(domain, fields)             # checked before anything is drawn
-
-    entries = FITToolbox.list_objects(domain).entries
-    colors  = _object_colors(entries)
-    lo = (domain.nodes_u[1], domain.nodes_v[1], domain.nodes_w[1])
-    hi = (domain.nodes_u[end], domain.nodes_v[end], domain.nodes_w[end])
-
-    fig = Figure(; size)
-    ls  = LScene(fig[1, 1]; show_axis = true)
-
-    # the domain, never clipped, so the cut keeps its frame
-    wireframe!(ls, Rect3f(Point3f(lo), Vec3f(hi .- lo)); color = :gray60)
-
-    # one visibility switch per object; toggles, clicks and "Show all" all set these
-    shown  = Dict(e.obj_id => Observable(true) for e in entries)
-    planes = Observable(Plane3f[])
-    plot_ids = IdDict{Any,Int}()
-    # switched by the "View" menu and the "Currents" toggles in the panel
-    voxel_mode    = Observable(false)
-    combined_mode = Observable(false)
-    edges_on   = Observable(false)
-    arrows_on  = Observable(false)
-    # loops show the edges they occupy when asked to, and always in the voxel view,
-    # which is the discretised view as a whole
-    edges_shown = lift(|, edges_on, voxel_mode)
+function _draw_each!(ls, domain, entries, colors, shown, voxels, shapes, plot_ids, views)
+    (; planes, voxel_mode, combined_mode, edges_shown, arrows_on) = views
     for e in entries
         id, c = e.obj_id, colors[e.obj_id]
         if e.object isa FITToolbox.AbstractEdgeSource
@@ -469,24 +495,247 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
             plot_ids[plt] = id
         end
     end
+    for (id, m) in voxels
+        plot_ids[mesh!(ls, m; color = colors[id], visible = lift(&, shown[id], voxel_mode))] = id
+    end
+    for (id, m) in shapes
+        plot_ids[mesh!(ls, m; color = colors[id], visible = lift(&, shown[id], combined_mode))] = id
+    end
+    return nothing
+end
 
+# --- Many objects: a plot per colour ---------------------------------------------
+
+# Objects drawn together in one plot: `build()` makes what it draws, and the index ranges
+# that take a picked vertex, point or marker back to its object, from the members shown.
+# Makie slows down with thousands of plots: 3000 take about 8 s just to create.
+mutable struct _Merged
+    ids::Vector{Int}
+    data::Observable{Any}
+    ranges::Vector{Pair{UnitRange{Int},Int}}
+    build::Any
+end
+
+function _rebuild!(g::_Merged)
+    data, g.ranges = g.build()
+    g.data[] = data
+    return g
+end
+
+# Changes to many objects at once (Show all, a checkbox per type, the voxels of all
+# objects after a cut) rebuild each merged plot once, at the end, not once per object
+mutable struct _Batch
+    depth::Int
+    dirty::Base.IdSet{_Merged}
+end
+_Batch() = _Batch(0, Base.IdSet{_Merged}())
+
+_request!(b::_Batch, g::_Merged) = (b.depth > 0 ? push!(b.dirty, g) : _rebuild!(g); nothing)
+
+function _batched(f, b::_Batch)
+    b.depth += 1
+    try
+        return f()
+    finally
+        b.depth -= 1
+        if b.depth == 0
+            dirty = collect(b.dirty)
+            empty!(b.dirty)
+            foreach(_rebuild!, dirty)
+        end
+    end
+end
+
+# The meshes (id => mesh) in one, with their normals if all have them, and the vertex
+# range of each
+function _concat_meshes(parts)
+    GB = Makie.GeometryBasics
+    isempty(parts) && return _EMPTY_VOXELS, Pair{UnitRange{Int},Int}[]
+    P, F, N = Point3f[], _TriFace[], Vec3f[]
+    ranges = Pair{UnitRange{Int},Int}[]
+    normals = all(p -> haskey(GB.vertex_attributes(last(p)), :normal), parts)
+    for (id, m) in parts
+        b = length(P)
+        append!(P, m.position)
+        for f in GB.faces(m)
+            push!(F, _TriFace(convert(Int, f[1]) + b, convert(Int, f[2]) + b, convert(Int, f[3]) + b))
+        end
+        normals && append!(N, GB.vertex_attributes(m)[:normal])
+        push!(ranges, (b + 1:length(P)) => id)
+    end
+    return (normals ? GB.Mesh(P, F; normal = N) : GB.Mesh(P, F)), ranges
+end
+
+# Fixed parts of the members `ids` in one vector: a hidden member's points are NaN, which
+# Makie does not draw, so the plot keeps its size. `nan` is the value of such a point.
+function _fixed_merged(ids, parts, shown, nan)
+    all_parts = isempty(parts) ? typeof(nan)[] : reduce(vcat, parts)
+    ranges = Pair{UnitRange{Int},Int}[]
+    b = 0
+    for (id, p) in zip(ids, parts)
+        push!(ranges, (b + 1:b + length(p)) => id)
+        b += length(p)
+    end
+    build() = (out = copy(all_parts);
+               foreach(r -> shown[last(r)][] || (out[first(r)] .= Ref(nan)), ranges);
+               (isempty(out) ? [nan] : out, ranges))
+    return _rebuild!(_Merged(collect(ids), Observable{Any}(nothing), ranges, build))
+end
+
+# A mesh of fixed parts, hidden members NaN
+function _fixed_merged_mesh(ids, meshes, shown)
+    base, ranges = _concat_meshes(collect(zip(ids, meshes)))
+    GB = Makie.GeometryBasics
+    function build()
+        any(r -> !shown[last(r)][], ranges) || return base, ranges
+        P = copy(base.position)
+        foreach(r -> shown[last(r)][] || (P[first(r)] .= Ref(Point3f(NaN))), ranges)
+        va = GB.vertex_attributes(base)
+        return (haskey(va, :normal) ? GB.Mesh(P, GB.faces(base); normal = va[:normal]) :
+                                      GB.Mesh(P, GB.faces(base))), ranges
+    end
+    return _rebuild!(_Merged(collect(ids), Observable{Any}(nothing), ranges, build))
+end
+
+# Group the entries by key(e), in order of first appearance
+function _groups_by(key, entries)
+    out = Pair{Any,Vector{Any}}[]
+    for e in entries
+        k = key(e)
+        i = findfirst(p -> first(p) == k, out)
+        i === nothing ? push!(out, k => Any[e]) : push!(last(out[i]), e)
+    end
+    return out
+end
+
+function _draw_merged!(ls, domain, entries, colors, shown, voxels, shapes, plot_ids, views, batch)
+    (; planes, voxel_mode, combined_mode, edges_shown, arrows_on) = views
+    merged = _Merged[]
+    # a merged plot (built when made) follows its members: shown or hidden, and, with
+    # `parts`, their meshes
+    function follow!(g, plt; parts = nothing)
+        push!(merged, g)
+        plot_ids[plt] = g
+        for id in g.ids
+            on(_ -> _request!(batch, g), shown[id])
+            parts === nothing || on(_ -> _request!(batch, g), parts[id])
+        end
+    end
+    solids  = [e for e in entries if e.object isa FITToolbox.AbstractSolid]
+    sources = [e for e in entries if e.object isa FITToolbox.AbstractEdgeSource]
+    charges = [e for e in entries if e.object isa FITToolbox.PointCharge]
+
+    # solids as defined, by colour and whether they are cut-outs (see _draw_each!)
+    for ((c, bg), es) in _groups_by(e -> (colors[e.obj_id], _is_background(e.object)), solids)
+        ids = [e.obj_id for e in es]
+        g = _fixed_merged_mesh(ids, [Makie.GeometryBasics.expand_faceviews(_object_mesh(e.object))
+                                     for e in es], shown)
+        plt = mesh!(ls, g.data; color = bg ? (c, _BACKGROUND_ALPHA) : c, transparency = bg,
+                    clip_planes = planes,
+                    visible = lift((v, gm) -> !v && (bg || !gm), voxel_mode, combined_mode))
+        follow!(g, plt)
+    end
+    # voxels and combined surfaces: the current meshes of the members shown
+    for (parts, mode) in ((voxels, voxel_mode), (shapes, combined_mode))
+        # cut-outs have neither: they are holes in both
+        for (c, es) in _groups_by(e -> colors[e.obj_id],
+                                  [e for e in solids if haskey(parts, e.obj_id) && !_is_background(e.object)])
+            ids = [e.obj_id for e in es]
+            build() = _concat_meshes([id => parts[id][] for id in ids
+                                      if shown[id][] && parts[id][] !== _EMPTY_VOXELS])
+            g = _rebuild!(_Merged(ids, Observable{Any}(nothing), Pair{UnitRange{Int},Int}[], build))
+            follow!(g, mesh!(ls, g.data; color = c, visible = mode); parts)
+        end
+    end
+    # wire sources: the line as given, the grid edges and the arrows on them
+    for (c, es) in _groups_by(e -> colors[e.obj_id], sources)
+        ids = [e.obj_id for e in es]
+        # a NaN point between the lines breaks them apart (a Point3f in brackets: bare,
+        # vcat would splice in its coordinates)
+        line = _fixed_merged(ids, [[_loop_points(e.object); [Point3f(NaN)]] for e in es], shown, Point3f(NaN))
+        follow!(line, lines!(ls, line.data; color = c, clip_planes = planes,
+                             linewidth = lift(on -> on ? 1 : 3, edges_shown)))
+        edges = [_loop_edges(domain, e.object) for e in es]
+        all(e -> isempty(first(e)), edges) && continue
+        segs = _fixed_merged(ids, [first(e) for e in edges], shown, Point3f(NaN))
+        follow!(segs, linesegments!(ls, segs.data; color = c, linewidth = 4, clip_planes = planes,
+                                    visible = edges_shown))
+        mids = _fixed_merged(ids, [e[2] for e in edges], shown, Point3f(NaN))
+        dirs = _fixed_merged(ids, [0.8f0 .* e[3] for e in edges], shown, Vec3f(NaN))
+        h = minimum(e -> minimum(d -> maximum(abs, d), e[3]; init = Inf32), edges)
+        plt = arrows3d!(ls, mids.data, dirs.data; color = c, align = :center,
+                        markerscale = h, tiplength = 0.45, tipradius = 0.25,
+                        shaftradius = 0.08, minshaftlength = 0.1, clip_planes = planes,
+                        visible = lift(&, edges_shown, arrows_on))
+        follow!(mids, plt)
+        follow!(dirs, plt)
+    end
+    # point charges, as given and on the node that receives them (see _draw_each!)
+    for (c, es) in _groups_by(e -> colors[e.obj_id], charges)
+        ids = [e.obj_id for e in es]
+        for (at, vis) in ((e -> Point3f(e.object.position), lift(!, voxel_mode)),
+                          (e -> Point3f(_charge_node_point(domain, e.object)), voxel_mode))
+            g = _fixed_merged(ids, [[at(e)] for e in es], shown, Point3f(NaN))
+            follow!(g, scatter!(ls, g.data; color = c, markersize = 16, strokewidth = 1,
+                                strokecolor = :black, clip_planes = planes, visible = vis))
+        end
+    end
+    return merged
+end
+
+function FITToolbox.view_domain(domain::FITToolbox.FITDomain, fields::Pair...;
+                                size = (1400, 750), refine::Int = 1)
+    _check_3d_backend()
+    fig, _ = _view_figure(domain, fields...; size, refine)
+    return fig
+end
+
+# The figure with all its controls, and the state they act on, for the tests:
+# CairoMakie cannot draw it, but can build it and run every callback.
+function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
+                      size = (1400, 750), refine::Int = 1)
+    refine >= 1 || throw(ArgumentError("refine must be at least 1, got $refine"))
+    specs = _field_specs(domain, fields)             # checked before anything is drawn
+
+    entries = FITToolbox.list_objects(domain).entries
+    colors  = _object_colors(entries)
+    lo = (domain.nodes_u[1], domain.nodes_v[1], domain.nodes_w[1])
+    hi = (domain.nodes_u[end], domain.nodes_v[end], domain.nodes_w[end])
+
+    fig = Figure(; size)
+    ls  = LScene(fig[1, 1]; show_axis = true)
+
+    # the domain, never clipped, so the cut keeps its frame
+    wireframe!(ls, Rect3f(Point3f(lo), Vec3f(hi .- lo)); color = :gray60)
+
+    # one visibility switch per object; toggles, clicks and "Show all" all set these
+    shown  = Dict(e.obj_id => Observable(true) for e in entries)
+    planes = Observable(Plane3f[])
+    plot_ids = IdDict{Any,Any}()                     # plot => obj_id, or its _Merged
+    # switched by the "View" menu and the "Currents" toggles in the panel
+    voxel_mode    = Observable(false)
+    combined_mode = Observable(false)
+    edges_on   = Observable(false)
+    arrows_on  = Observable(false)
+    # loops show the edges they occupy when asked to, and always in the voxel view,
+    # which is the discretised view as a whole
+    edges_shown = lift(|, edges_on, voxel_mode)
     # the voxels of each solid; built when the voxel view is first opened and rebuilt
     # when the cut changes (cells beyond the cut count as empty, so the cut face is
-    # drawn), hence no clip planes here
+    # drawn), hence no clip planes there
     voxels = Dict(e.obj_id => Observable(_EMPTY_VOXELS)
                   for e in entries if e.object isa FITToolbox.AbstractSolid)
-    for (id, m) in voxels
-        plt = mesh!(ls, m; color = colors[id], visible = lift(&, shown[id], voxel_mode))
-        plot_ids[plt] = id
-    end
     # the combined surfaces, of the solids that are not cut-outs; built when the
     # combined view is first opened. Untyped: the meshes carry normals, the stand-in not
     shapes = Dict(e.obj_id => Observable{Any}(_EMPTY_VOXELS) for e in entries
                   if e.object isa FITToolbox.AbstractSolid && !_is_background(e.object))
-    for (id, m) in shapes
-        plt = mesh!(ls, m; color = colors[id], visible = lift(&, shown[id], combined_mode))
-        plot_ids[plt] = id
-    end
+    views = (; planes, voxel_mode, combined_mode, edges_shown, arrows_on)
+    # Up to _MAX_OBJECT_TOGGLES objects a plot per object and view; more are merged into
+    # a plot per colour, since Makie slows down with thousands of plots
+    batch = _Batch()
+    merged = length(entries) <= _MAX_OBJECT_TOGGLES ?
+        (_draw_each!(ls, domain, entries, colors, shown, voxels, shapes, plot_ids, views); nothing) :
+        _draw_merged!(ls, domain, entries, colors, shown, voxels, shapes, plot_ids, views, batch)
 
     # --- panel, in two columns so that it fits the window: view and objects (up to
     # _MAX_OBJECT_TOGGLES checkboxes) in the first, cut and currents in the second ---
@@ -506,7 +755,7 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
     for (label, ids, swatch) in _toggle_groups(entries, colors)
         t = _checkbox(panel[row += 1, 1], true; color = something(swatch, :gray50))
         Label(panel[row, 2:3], label; halign = :left)
-        on(checked -> foreach(id -> shown[id][] = checked, ids), t.checked)
+        on(checked -> _batched(() -> foreach(id -> shown[id][] = checked, ids), batch), t.checked)
         push!(toggles, t)
     end
 
@@ -535,8 +784,10 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
     reset    = _button(buttons[1, 2], "Reset view")
     on(_ -> _reset_view!(ls.scene), reset.clicks)
     on(show_all.clicks) do _
-        foreach(t -> t.checked[] = true, toggles)
-        foreach(o -> o[] = true, values(shown))
+        _batched(batch) do
+            foreach(t -> t.checked[] = true, toggles)
+            foreach(o -> o[] = true, values(shown))
+        end
         info[] = "Click an object to hide it"
     end
 
@@ -562,14 +813,20 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
         planes[] = active ? [_clip_plane(a, pos)] : Plane3f[]
     end
 
-    labels = Ref{Union{Nothing,Array{Int,3}}}(nothing)     # computed on first use
+    labels = Ref{Any}(nothing)                       # computed on first use
+    vfaces = Ref{Any}(nothing)                       # their faces, the cut is made from
     function update_voxels!()
         voxel_mode[] || return
-        labels[] === nothing && (labels[] = _owner_labels(domain))
+        if labels[] === nothing
+            labels[] = _owner_labels(domain)
+            vfaces[] = _voxel_faces(domain, labels[])
+        end
         keep = cut_on.checked[] ? _cut_cells(domain, axis[], slider.value[]) : nothing
-        meshes = _voxel_meshes(domain, labels[]; keep)
-        for (id, m) in voxels
-            m[] = get(meshes, id, _EMPTY_VOXELS)
+        meshes = _voxel_cut(domain, labels[], vfaces[]; keep)
+        _batched(batch) do
+            for (id, m) in voxels
+                m[] = get(meshes, id, _EMPTY_VOXELS)
+            end
         end
     end
     onany((_...) -> update_voxels!(), voxel_mode, cut_on.checked, axis, slider.value)
@@ -588,8 +845,10 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
         end
         cut = cut_on.checked[] ? (axis[], slider.value[]) : nothing
         meshes = cut === nothing ? uncut[] : _combined_meshes(fields[], groups[], grid[]; cut)
-        for (id, m) in shapes
-            m[] = get(meshes, id, _EMPTY_VOXELS)
+        _batched(batch) do
+            for (id, m) in shapes
+                m[] = get(meshes, id, _EMPTY_VOXELS)
+            end
         end
     end
     onany((_...) -> update_shapes!(), combined_mode, cut_on.checked, axis, slider.value)
@@ -630,8 +889,8 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
             press_pos[] = mouse
         elseif event.action == Mouse.release && is_mouseinside(ls.scene) &&
                hypot((mouse .- press_pos[])...) < 3
-            plt, _ = pick(ls.scene)
-            _hide_object!(shown, entries, info, _picked_id(plot_ids, plt))
+            plt, idx = pick(ls.scene)
+            _hide_object!(shown, entries, info, _picked_id(plot_ids, plt, idx))
         end
         return Consume(false)
     end
@@ -639,5 +898,5 @@ function _view_figure(domain::FITToolbox.FITDomain, fields::Pair...;
     colsize!(fig.layout, 2, Fixed(270))
     colsize!(fig.layout, 3, Fixed(250))
     return fig, (; ls, shown, voxels, voxel_mode, shapes, combined_mode, planes, plot_ids, info, object_menu,
-                 cut = cut_on.checked, grid_box = grid_on, field)
+                 cut = cut_on.checked, grid_box = grid_on, field, merged)
 end

@@ -48,11 +48,3 @@ function _dual_divergence(config, J)
     end
     return div
 end
-
-#function S(config)
-#    return get_divergence(config, Primal())
-#end
-
-#function S̃(config)
-#    return get_divergence(config, Dual())
-#end

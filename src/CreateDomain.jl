@@ -18,6 +18,7 @@ struct Material
     color::Union{Nothing,String}   # for plotting only; nothing = choose automatically
 
     function Material(σ, ε_r, μ_r, color::Union{Nothing,AbstractString}=nothing)
+        _check_material(σ, ε_r, μ_r)
         color === nothing || _valid_color(color) ||
             throw(ArgumentError("unknown color \"$color\": use a hex code like \"#B87333\" \
                                  or one of $(join(sort(collect(keys(_NAMED_COLORS))), ", "))"))
@@ -40,7 +41,20 @@ const _NAMED_COLORS = Dict(
     "background" => "#D3D3D3",
 )
 
-const _HEX_COLOR = r"^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
+# Material values the matrices can take: a negative σ makes a lossy medium gain energy, and
+# ε_r or μ_r of zero or below leave M_ε or M_ν singular or indefinite, which surfaces much
+# later, or never, as a solver that fails. Checked for every solid and the background.
+function _check_material(σ, ε_r, μ_r)
+    isfinite(σ) && σ >= 0 ||
+        throw(ArgumentError("conductivity σ must be finite and not negative, got $σ"))
+    isfinite(ε_r) && ε_r > 0 ||
+        throw(ArgumentError("relative permittivity ε_r must be finite and positive, got $ε_r"))
+    isfinite(μ_r) && μ_r > 0 ||
+        throw(ArgumentError("relative permeability μ_r must be finite and positive, got $μ_r"))
+    return nothing
+end
+
+const _HEX_COLOR =r"^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
 _valid_color(c) = occursin(_HEX_COLOR, c) || haskey(_NAMED_COLORS, lowercase(c))
 
 # The material of a new solid. color = "background" makes it a cut-out: it takes the
@@ -219,6 +233,85 @@ _cell_range(nodes, lo, hi) =
 _cell_ranges(domain, (lo, hi)) =
     ntuple(d -> _cell_range((domain.nodes_u, domain.nodes_v, domain.nodes_w)[d], lo[d], hi[d]), 3)
 
+# Paint a solid into domain.material, the cells of _fill_cells!. Returns their number.
+function _paint!(domain, solid::AbstractSolid)
+    σ, ε_r, μ_r = solid.material.σ, solid.material.ε_r, solid.material.μ_r
+    md = domain.material
+    return _fill_cells!(domain, solid) do i, j, k
+        @inbounds md[i, j, k, 1] = σ
+        @inbounds md[i, j, k, 2] = ε_r
+        @inbounds md[i, j, k, 3] = μ_r
+    end
+end
+
+# Call set!(i, j, k) for every cell a round solid (sphere, cylinder, torus, helix) takes:
+# a cell is taken when at least half of it lies inside, judged by 27 sub-voxel centres at
+# 1/6, 3/6, 5/6 of the cell in each direction (14 or more inside). Only the cells around
+# the solid (_extent) are scanned. Returns the number of cells. Besides the material, the
+# views of view_domain fill their labels with it. The brick has a method of its own.
+function _fill_cells!(set!, domain, solid::AbstractSolid)
+    # node positions relative to the solid's reference point, the frame of _inside_test
+    ref = _reference(solid)
+    du = domain.nodes_u .- ref[1]
+    dv = domain.nodes_v .- ref[2]
+    dw = domain.nodes_w .- ref[3]
+    inside = _inside_test(solid)
+
+    # k outermost for threading (stride Nu*Nv, so threads write far apart),
+    # i innermost because the cell arrays are contiguous in i
+    cells = _cell_ranges(domain, _extent(solid))
+    filled = zeros(Int, domain.Nw - 1)
+    @threads for k in cells[3]
+        ww = (dw[k+1] - dw[k]) / 6.0
+        w_samples = (dw[k] + ww, dw[k] + 3.0*ww, dw[k] + 5.0*ww)
+
+        @inbounds for j in cells[2]
+            vw = (dv[j+1] - dv[j]) / 6.0
+            v_samples = (dv[j] + vw, dv[j] + 3.0*vw, dv[j] + 5.0*vw)
+
+            for i in cells[1]
+                uw = (du[i+1] - du[i]) / 6.0
+                u_samples = (du[i] + uw, du[i] + 3.0*uw, du[i] + 5.0*uw)
+
+                count_inside = 0
+                for us in u_samples, vs in v_samples, ws in w_samples
+                    inside((us, vs, ws)) && (count_inside += 1)
+                end
+
+                if count_inside >= 14
+                    set!(i, j, k)
+                    filled[k] += 1
+                end
+            end
+        end
+    end
+    return sum(filled)
+end
+
+# Lengths of solids and loops: positive and finite. An infinite radius would pass a test
+# for > 0 and then fill or clip against the whole domain without saying so.
+_positive_length(x) = isfinite(x) && x > 0
+
+# A solid must reach into the domain. Its reference point (the corner of a brick, the
+# centre of a sphere or torus, the base of a cylinder or helix) may lie outside, e.g. for
+# a sphere centred just beyond a wall; the part beyond the domain is clipped, with the
+# warning of each solid. Throws for a position that is not finite, and for a solid that
+# misses the domain altogether: judged by its bounding box (_extent) along each axis, so a
+# box that only touches the domain from outside counts as outside.
+function _check_reaches_domain(domain::FITDomain, solid::AbstractSolid, kind, reference)
+    ref = _reference(solid)
+    all(isfinite, ref) || throw(ArgumentError("$kind $reference must be finite, got $ref m"))
+    lo, hi = _extent(solid)
+    nodes = (domain.nodes_u, domain.nodes_v, domain.nodes_w)
+    for (d, name) in zip(1:3, ("u", "v", "w"))
+        lo[d] < nodes[d][end] && hi[d] > nodes[d][1] && continue
+        throw(ArgumentError("the $kind lies outside the domain: it spans $name = \
+                             $(_short(lo[d])) … $(_short(hi[d])) m, the domain $name = \
+                             $(_short(nodes[d][1])) … $(_short(nodes[d][end])) m"))
+    end
+    return nothing
+end
+
 """
     create_domain(domain_size, resolution; units = "m", σ = 0.0, ε_r = 1.0, μ_r = 1.0)
         -> FITDomain
@@ -239,8 +332,10 @@ axis, for a graded grid; the nodes are their running sums from 0. All lengths ar
 in `units` ("nm", "μm", "mm", "cm", "dm", "m" or "km"); the domain stores them in m.
 
 Throws an `ArgumentError` if `domain_size` or `resolution` does not have three values, or
-if a size, a resolution or a cell width is not positive and finite, or if an axis has no
-cell.
+if a size, a resolution or a cell width is not positive and finite, if an axis has no
+cell, or if the background material is not physical: `σ` must be finite and not
+negative, `ε_r` and `μ_r` finite and positive. The solids check their material the same
+way.
 
 # Examples
 
@@ -290,6 +385,7 @@ function create_domain(Edges_U, Edges_V, Edges_W; units="m", σ=0.0, ε_r=1.0, �
     σ = Float64(σ)
     ε_r = Float64(ε_r)
     μ_r  = Float64(μ_r)
+    _check_material(σ, ε_r, μ_r)
     unitToMeter = check_units(units)
 
     # zero, negative or NaN widths would give nodes out of order, and every search on
@@ -367,3 +463,27 @@ get_cell_count(domain)          # 100 × 80 × 60 = 480000
 ```
 """
 get_cell_count(domain::FITDomain) = (domain.Nu - 1) * (domain.Nv - 1) * (domain.Nw - 1)
+
+# Displayed as a summary: the default show of a struct prints every field, the node
+# vectors, facet matrices and material array, thousands of characters on one line.
+_cells_label(d::FITDomain) = "$(d.Nu - 1)×$(d.Nv - 1)×$(d.Nw - 1) cells"
+_n_objects_label(n) = n == 1 ? "1 object" : "$n objects"
+
+function Base.show(io::IO, d::FITDomain)
+    print(io, "FITDomain(", _cells_label(d), ", ",
+          _n_objects_label(length(_active_ids(d._history))), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", d::FITDomain)
+    edges = (d.edges_u, d.edges_v, d.edges_w)
+    graded = any(e -> !all(x -> isapprox(x, e[1]; rtol = 1e-9), e), edges)
+    n = length(_active_ids(d._history))
+    println(io, "FITDomain: ", _cells_label(d), " (", get_cell_count(d), "), ", d.Np, " nodes, ",
+            graded ? "graded" : "equidistant")
+    println(io, "  extent:     ", join((_short(e[end] - e[1]) for e in
+                                       (d.nodes_u, d.nodes_v, d.nodes_w)), " × "), " m")
+    graded ||
+        println(io, "  resolution: ", join((_short(e[1]) for e in edges), " × "), " m")
+    println(io, "  background: σ = ", _short(d.σ), ", ε_r = ", _short(d.ε_r), ", μ_r = ", _short(d.μ_r))
+    print(io, "  objects:    ", _n_objects_label(n), n == 0 ? "" : " (see list_objects)")
+end
